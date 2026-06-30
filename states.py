@@ -2,11 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AddProduct(StatesGroup):
-    emoji = State()
-    name = State()
-    price = State()
-    desc = State()
-    stock = State()
+    details = State()
 
 
 class EditProduct(StatesGroup):
@@ -19,6 +15,9 @@ class AddStock(StatesGroup):
 
 class Broadcast(StatesGroup):
     message = State()
+    button_choice = State()
+    product_select = State()
+    custom_button = State()
 
 
 class AddBalance(StatesGroup):
@@ -42,6 +41,32 @@ class BulkUpload(StatesGroup):
 class UserLookup(StatesGroup):
     query = State()
 
-
 class CustomBalance(StatesGroup):
     amount = State()
+
+class AddCategory(StatesGroup):
+    emoji = State()
+    name = State()
+
+class AddPromo(StatesGroup):
+    code = State()
+    type = State()
+    value = State()
+    max_uses = State()
+
+class BuyProduct(StatesGroup):
+    quantity = State()
+    promo_code = State()
+
+class SupportTicket(StatesGroup):
+    message = State()
+
+class AdminReplySupport(StatesGroup):
+    message = State()
+
+class ProductReview(StatesGroup):
+    rating = State()
+    comment = State()
+
+class RedeemPromo(StatesGroup):
+    code = State()
