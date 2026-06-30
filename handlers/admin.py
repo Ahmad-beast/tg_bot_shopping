@@ -1100,3 +1100,47 @@ async def a_topup_preview(cb: CallbackQuery):
     )
     await cb.answer()
 
+
+@router.callback_query(F.data == "a_backup")
+async def a_backup(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+        
+    from aiogram.types import FSInputFile
+    from config import DB_PATH
+    import os
+    
+    if not os.path.exists(DB_PATH):
+        return await cb.answer("❌ Database file not found!", show_alert=True)
+        
+    try:
+        db_file = FSInputFile(DB_PATH, filename="store_backup.db")
+        await cb.message.answer_document(db_file, caption="📦 <b>Nova X Live Database Backup</b>")
+        await cb.answer("✅ Backup sent successfully!")
+    except Exception as e:
+        await cb.answer(f"❌ Failed to send backup: {e}", show_alert=True)
+
+
+# ---------- DATABASE RESTORE ----------
+@router.message(F.document)
+async def admin_restore_db(m: Message):
+    if not is_admin(m.from_user.id):
+        return
+        
+    doc = m.document
+    if doc.file_name.endswith(".db"):
+        from config import DB_PATH
+        
+        progress = await m.answer("⏳ Downloading and restoring database backup...")
+        try:
+            file_info = await m.bot.get_file(doc.file_id)
+            await m.bot.download_file(file_info.file_path, DB_PATH)
+            
+            await progress.edit_text(
+                f"✅ <b>DATABASE RESTORED!</b>\n{DIVIDER}\n\n"
+                f"Your backup file <code>{doc.file_name}</code> has been uploaded to the server volume successfully!\n\n"
+                f"🔄 <i>Please restart the bot service on Railway to apply all changes correctly.</i>"
+            )
+        except Exception as e:
+            await progress.edit_text(f"❌ <b>Restoration Failed:</b>\n\n<code>{e}</code>")
+
