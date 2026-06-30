@@ -5,45 +5,90 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
-from subscription import is_subscribed, join_keyboard, join_text
-from config import CHANNEL_ID  # add to existing config import
-
-
 
 import database as db
 import keyboards as kb
-from config import ADMIN_IDS, DIVIDER, BINANCE_PAY_ID, SUPPORT_USERNAME, MIN_TOPUP, is_admin
-from states import TopUp
-from utils import send_temp
+from config import (
+    ADMIN_IDS, DIVIDER, BINANCE_PAY_ID, SUPPORT_USERNAME, 
+    MIN_TOPUP, is_admin, REFERRAL_COMMISSION_PERCENT, DAILY_REWARD_AMOUNT
+)
+from states import TopUp, BuyProduct, SupportTicket, ProductReview, RedeemPromo
+from subscription import is_subscribed, join_keyboard, join_text
 
 router = Router()
 
 
-def home_text(name):
+async def home_text(user_id, name):
+    user_info = await db.user_profile(user_id)
+    ref_count, _ = await db.get_referral_stats(user_id)
+    
+    bal = user_info["balance"] if user_info else 0.0
+    orders = user_info["orders"] if user_info else 0
+    
     return (
-        f"<b>🛍 DIGITAL STORE</b>\n{DIVIDER}\n\n"
+        f"<b>🤖 WELCOME TO NOVA X</b>\n"
+        f"{DIVIDER}\n\n"
         f"👋 Welcome, <b>{name}</b>!\n\n"
-        f"🔥 <b>Premium Digital Services</b>\n\n"
-        f"⚡ Instant Delivery\n🔒 Secure Service\n💎 Premium Quality\n\n"
-        f"{DIVIDER}\n👇 <i>Select an option below</i>"
+        f"💳 <b>Your Wallet Balance:</b> <code>${bal:.2f}</code>\n"
+        f"📦 <b>Total Purchases:</b> <code>{orders}</code>\n"
+        f"👥 <b>Total Invited:</b> <code>{ref_count}</code>\n\n"
+        f"💎 <i>Get instant access to premium digital licenses, streaming accounts, and keys. 24/7 delivery!</i>\n\n"
+        f"{DIVIDER}\n"
+        f"👇 Select an option from the menu below:"
     )
 
 
 @router.message(CommandStart())
 async def start(message: Message):
     await db.add_user(message.from_user.id, message.from_user.first_name)
+    
+    # Handle deep-linking
+    args = message.text.split()
+    prod_id = None
+    if len(args) > 1:
+        arg = args[1]
+        if arg.startswith("ref_"):
+            try:
+                referrer_id = int(arg.split("_")[1])
+                await db.set_referrer(message.from_user.id, referrer_id)
+            except (ValueError, IndexError):
+                pass
+        elif arg.startswith("prod_"):
+            try:
+                prod_id = int(arg.split("_")[1])
+            except (ValueError, IndexError):
+                pass
+
     if not await is_subscribed(message.bot, message.from_user.id):
         return await message.answer(join_text(), reply_markup=join_keyboard())
+
+    if prod_id:
+        p = await db.get_product(prod_id)
+        if p:
+            cnt = await db.stock_count(prod_id)
+            stock_line = f"📦 <b>In stock:</b> {cnt}" if cnt > 0 else "❌ <b>Out of stock</b>"
+            rating, count = await db.get_product_rating(prod_id)
+            rating_line = f"⭐ <b>Rating:</b> {rating:.1f}/5.0 ({count} reviews)" if count > 0 else "⭐ <b>Rating:</b> No reviews yet"
+            text = (
+                f"<b>{p[1]} {p[2].upper()}</b>\n{DIVIDER}\n\n"
+                f"{p[4]}\n\n"
+                f"💰 <b>Price:</b> ${p[3]:.2f}\n"
+                f"{rating_line}\n"
+                f"{stock_line}\n\n{DIVIDER}"
+            )
+            return await message.answer(text, reply_markup=kb.product_detail_menu(prod_id, cnt > 0, category_id=p[5]))
+
     await message.answer(
-        home_text(message.from_user.first_name),
+        await home_text(message.from_user.id, message.from_user.first_name),
         reply_markup=kb.main_menu(is_admin(message.from_user.id)),
     )
+
 
 @router.callback_query(F.data == "check_join")
 async def check_join(cb: CallbackQuery):
     if await is_subscribed(cb.bot, cb.from_user.id):
         await cb.message.edit_text(
-            home_text(cb.from_user.first_name),
+            await home_text(cb.from_user.id, cb.from_user.first_name),
             reply_markup=kb.main_menu(is_admin(cb.from_user.id)),
         )
         await cb.answer("✅ Welcome!")
@@ -51,13 +96,11 @@ async def check_join(cb: CallbackQuery):
         await cb.answer("❌ You haven't joined yet. Please join first.", show_alert=True)
 
 
-
-
 @router.callback_query(F.data == "home")
 async def home(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.edit_text(
-        home_text(cb.from_user.first_name),
+        await home_text(cb.from_user.id, cb.from_user.first_name),
         reply_markup=kb.main_menu(is_admin(cb.from_user.id)),
     )
     await cb.answer()
@@ -65,6 +108,19 @@ async def home(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "products")
 async def products(cb: CallbackQuery):
+    categories = await db.get_categories()
+    if not categories:
+        return await show_all_products(cb)
+    
+    await cb.message.edit_text(
+        f"<b>📂 PRODUCT CATEGORIES</b>\n{DIVIDER}\n\nSelect a category to browse 👇",
+        reply_markup=kb.categories_menu(categories)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "cat_all")
+async def show_all_products(cb: CallbackQuery):
     items = await db.get_products()
     if not items:
         await cb.message.edit_text(
@@ -73,8 +129,27 @@ async def products(cb: CallbackQuery):
         return await cb.answer()
     stocks = {p[0]: await db.stock_count(p[0]) for p in items}
     await cb.message.edit_text(
-        f"<b>🛒 PRODUCT CATALOG</b>\n{DIVIDER}\n\nChoose a product to view details 👇",
-        reply_markup=kb.products_menu(items, stocks))
+        f"<b>🛒 ALL PRODUCTS</b>\n{DIVIDER}\n\nChoose a product to view details 👇",
+        reply_markup=kb.products_menu(items, stocks, category_id="all"))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cat:"))
+async def view_category_products(cb: CallbackQuery):
+    cid = int(cb.data.split(":")[1])
+    cat = await db.get_category(cid)
+    if not cat:
+        return await cb.answer("Category not found!", show_alert=True)
+    items = await db.get_products(category_id=cid)
+    if not items:
+        await cb.message.edit_text(
+            f"<b>📁 {cat[2]}</b>\n{DIVIDER}\n\n🚫 No products available in this category yet.",
+            reply_markup=kb.products_menu([], {}, category_id=cid))
+        return await cb.answer()
+    stocks = {p[0]: await db.stock_count(p[0]) for p in items}
+    await cb.message.edit_text(
+        f"<b>📁 {cat[2]}</b>\n{DIVIDER}\n\nChoose a product to view details 👇",
+        reply_markup=kb.products_menu(items, stocks, category_id=cid))
     await cb.answer()
 
 
@@ -86,61 +161,274 @@ async def view_product(cb: CallbackQuery):
         return await cb.answer("Product not found!", show_alert=True)
     cnt = await db.stock_count(pid)
     stock_line = f"📦 <b>In stock:</b> {cnt}" if cnt > 0 else "❌ <b>Out of stock</b>"
+    
+    rating, count = await db.get_product_rating(pid)
+    rating_line = f"⭐ <b>Rating:</b> {rating:.1f}/5.0 ({count} reviews)" if count > 0 else "⭐ <b>Rating:</b> No reviews yet"
+
     text = (
         f"<b>{p[1]} {p[2].upper()}</b>\n{DIVIDER}\n\n"
         f"{p[4]}\n\n"
-        f"💰 <b>Price:</b> ${p[3]:.2f}\n{stock_line}\n\n{DIVIDER}"
+        f"💰 <b>Price:</b> ${p[3]:.2f}\n"
+        f"{rating_line}\n"
+        f"{stock_line}\n\n{DIVIDER}"
     )
-    await cb.message.edit_text(text, reply_markup=kb.product_detail_menu(pid, cnt > 0))
+    await cb.message.edit_text(text, reply_markup=kb.product_detail_menu(pid, cnt > 0, category_id=p[5]))
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith("buy:"))
-async def buy(cb: CallbackQuery):
+@router.callback_query(F.data.startswith("buy_qty:"))
+async def buy_quantity_select(cb: CallbackQuery):
     pid = int(cb.data.split(":")[1])
     p = await db.get_product(pid)
     if not p:
         return await cb.answer("Product not found!", show_alert=True)
-
+    
     cnt = await db.stock_count(pid)
     if cnt <= 0:
         return await cb.answer("❌ Out of stock!", show_alert=True)
+    
+    await cb.message.edit_text(
+        f"🛒 <b>Buy {p[1]} {p[2]}</b>\n{DIVIDER}\n\n"
+        f"Select how many items you want to buy (Available: {cnt}):",
+        reply_markup=kb.quantity_menu(pid, cnt)
+    )
+    await cb.answer()
 
-    price = p[3]
+
+@router.callback_query(F.data.startswith("qsel:"))
+async def quantity_selected(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    pid = int(parts[1])
+    qty_str = parts[2]
+    
+    p = await db.get_product(pid)
+    if not p:
+        return await cb.answer("Product not found!", show_alert=True)
+    
+    cnt = await db.stock_count(pid)
+    if cnt <= 0:
+        return await cb.answer("❌ Out of stock!", show_alert=True)
+    
+    if qty_str == "custom":
+        await state.update_data(buy_pid=pid)
+        await state.set_state(BuyProduct.quantity)
+        await cb.message.edit_text(
+            f"✏️ <b>Enter custom quantity</b> for {p[1]} {p[2]}:\n"
+            f"Available stock: <b>{cnt}</b>\n"
+            f"Price per unit: <b>${p[3]:.2f}</b>",
+            reply_markup=kb.back_menu()
+        )
+        return await cb.answer()
+    
+    qty = int(qty_str)
+    if qty > cnt:
+        return await cb.answer(f"❌ Only {cnt} items left in stock!", show_alert=True)
+    
+    await show_checkout_confirmation(cb.message, state, p, qty)
+    await cb.answer()
+
+
+@router.message(BuyProduct.quantity)
+async def custom_qty_input(message: Message, state: FSMContext):
+    data = await state.get_data()
+    pid = data.get("buy_pid")
+    p = await db.get_product(pid)
+    if not p:
+        await state.clear()
+        return await message.answer("Product not found.")
+    
+    try:
+        qty = int(message.text)
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        return await message.answer("❌ Please enter a valid positive integer.")
+    
+    cnt = await db.stock_count(pid)
+    if qty > cnt:
+        return await message.answer(f"❌ Only {cnt} items left in stock! Enter a smaller quantity:")
+    
+    await show_checkout_confirmation(message, state, p, qty)
+
+
+async def show_checkout_confirmation(message_obj, state: FSMContext, product, quantity, promo_discount=0.0, promo_code=None):
+    await state.update_data(buy_pid=product[0], buy_qty=quantity, promo_discount=promo_discount, promo_code=promo_code)
+    
+    total_price = (product[3] * quantity) - promo_discount
+    if total_price < 0:
+        total_price = 0.0
+    
+    discount_txt = f"\n🎟️ Promo discount: <b>-${promo_discount:.2f}</b>" if promo_discount > 0 else ""
+    promo_code_txt = f"\n🔑 Code applied: <code>{promo_code}</code>" if promo_code else ""
+    
+    text = (
+        f"<b>🛒 CHECKOUT CONFIRMATION</b>\n{DIVIDER}\n\n"
+        f"📦 Product: {product[1]} <b>{product[2]}</b>\n"
+        f"🔢 Quantity: <b>{quantity}</b>\n"
+        f"💵 Price per unit: <b>${product[3]:.2f}</b>{discount_txt}{promo_code_txt}\n\n"
+        f"💰 Total Cost: <b>${total_price:.2f}</b>\n{DIVIDER}\n"
+        f"Confirm your purchase below 👇"
+    )
+    
+    reply_markup = kb.checkout_menu(product[0], quantity, has_promo=(promo_code is not None))
+    
+    if isinstance(message_obj, Message):
+        await message_obj.answer(text, reply_markup=reply_markup)
+    else:
+        await message_obj.message.edit_text(text, reply_markup=reply_markup)
+
+
+@router.callback_query(F.data.startswith("chk_promo:"))
+async def checkout_apply_promo_start(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    pid = int(parts[1])
+    qty = int(parts[2])
+    
+    await state.update_data(buy_pid=pid, buy_qty=qty)
+    await state.set_state(BuyProduct.promo_code)
+    await cb.message.edit_text(
+        "🎟️ <b>Enter your Promo Code:</b>",
+        reply_markup=kb.back_menu()
+    )
+    await cb.answer()
+
+
+@router.message(BuyProduct.promo_code)
+async def checkout_apply_promo_save(message: Message, state: FSMContext):
+    code = message.text.strip().upper()
+    data = await state.get_data()
+    pid = data.get("buy_pid")
+    qty = data.get("buy_qty")
+    
+    p = await db.get_product(pid)
+    if not p:
+        await state.clear()
+        return await message.answer("Product not found.")
+    
+    promo = await db.get_promo_code(code)
+    if not promo:
+        return await message.answer("❌ Invalid promo code! Try again or type /cancel to go back:")
+    
+    if promo[3] is not None and promo[4] >= promo[3]:
+        return await message.answer("❌ This promo code has reached its maximum usage limit!")
+    
+    if await db.is_promo_used(code, message.from_user.id):
+        return await message.answer("❌ You have already used this promo code!")
+    
+    promo_type = promo[1]
+    val = promo[2]
+    
+    if promo_type == 'balance':
+        return await message.answer("❌ This promo code is a Gift Card. Redeem it under 💰 Balance → Redeem Promo Code.")
+    
+    discount_amount = 0.0
+    subtotal = p[3] * qty
+    if promo_type == 'percentage':
+        discount_amount = subtotal * (val / 100.0)
+    elif promo_type == 'discount':
+        discount_amount = val
+    
+    if discount_amount > subtotal:
+        discount_amount = subtotal
+        
+    await show_checkout_confirmation(message, state, p, qty, promo_discount=discount_amount, promo_code=code)
+
+
+@router.callback_query(F.data.startswith("chk_pay:"))
+async def checkout_payment(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    pid = int(parts[1])
+    qty = int(parts[2])
+    
+    p = await db.get_product(pid)
+    if not p:
+        return await cb.answer("Product not found!", show_alert=True)
+    
+    data = await state.get_data()
+    promo_discount = data.get("promo_discount", 0.0)
+    promo_code = data.get("promo_code")
+    
+    cnt = await db.stock_count(pid)
+    if cnt < qty:
+        return await cb.answer("❌ Stock running low! Insufficient items left.", show_alert=True)
+    
+    price = (p[3] * qty) - promo_discount
+    if price < 0:
+        price = 0.0
+        
     bal = await db.get_balance(cb.from_user.id)
     if bal < price:
         return await cb.answer(
             f"❌ Insufficient balance!\nNeed ${price:.2f}, you have ${bal:.2f}.",
             show_alert=True)
-
-    # take one item (the user's unique ID/account)
-    content = await db.take_one_stock(pid)
-    if content is None:
-        return await cb.answer("❌ Out of stock!", show_alert=True)
-
+    
+    items = await db.take_stock_items(pid, qty)
+    if not items or len(items) < qty:
+        return await cb.answer("❌ Purchase failed. Out of stock!", show_alert=True)
+    
+    if promo_code:
+        await db.use_promo_code(promo_code, cb.from_user.id)
+        
     await db.update_balance(cb.from_user.id, -price)
-    await db.add_order(cb.from_user.id, p[2], content, price)
-
+    
+    content_delivered = "\n".join(items)
+    for item in items:
+        await db.add_order(cb.from_user.id, p[2], item, p[3])
+        
+    await state.clear()
+    
     delivered = (
         f"<b>✅ PURCHASE SUCCESSFUL</b>\n{DIVIDER}\n\n"
-        f"{p[1]} <b>{p[2]}</b>\n\n"
-        f"🔐 <b>Your account / ID</b> (auto-deletes soon):\n"
-        f"<code>{content}</code>\n\n"
-        f"💰 New balance: ${(bal - price):.2f}\n\n"
-        f"<i>Saved in My Orders.</i>"
+        f"📦 Product: {p[1]} <b>{p[2]}</b> (x{qty})\n\n"
+        f"🔐 <b>Your account / ID list</b>:\n"
+        f"<code>{content_delivered}</code>\n\n"
+        f"💰 Total Paid: ${price:.2f}\n"
+        f"💵 New balance: ${(bal - price):.2f}\n\n"
+        f"<i>Please rate your purchase below! ⭐️</i>"
     )
-    await send_temp(cb.message, delivered)
-    await cb.answer("✅ Purchased! Check the message below.", show_alert=True)
-
-    for admin in ADMIN_IDS:
-        if CHANNEL_ID:
-            with suppress(Exception):
-                await cb.bot.send_message(
+    
+    await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
+    await cb.answer("✅ Purchase successful!", show_alert=True)
+    
+    from config import CHANNEL_ID
+    if CHANNEL_ID:
+        total_count, total_revenue = await db.order_stats()
+        with suppress(Exception):
+            await cb.bot.send_message(
                 CHANNEL_ID,
                 f"🎉 <b>NEW SALE!</b>\n{DIVIDER}\n\n"
-                f"{p[1]} <b>{p[2]}</b> just got purchased! ✅\n\n"
-                f"🛒 Get yours now in our store bot!"
+                f"{p[1]} <b>{p[2]}</b> (x{qty})\n"
+                f"💵 Price paid: <b>${price:.2f}</b>\n\n"
+                f"📊 <b>Total sales:</b> {total_count}\n"
+                f"💰 <b>Total revenue:</b> ${total_revenue:.2f}\n\n"
+                f"🛒 Get yours now 👇",
+                reply_markup=kb.buy_now_kb(),
             )
+
+
+@router.callback_query(F.data.startswith("rate:"))
+async def product_rating_receive(cb: CallbackQuery):
+    parts = cb.data.split(":")
+    pid = int(parts[1])
+    rating = int(parts[2])
+    
+    await db.add_review(cb.from_user.id, pid, rating)
+    await cb.message.edit_text(
+        f"<b>Thank you for your rating! ⭐ {rating}/5</b>\n\n"
+        f"Your feedback helps us maintain premium quality services.",
+        reply_markup=kb.back_menu()
+    )
+    await cb.answer("Rating submitted!")
+
+
+@router.callback_query(F.data == "skip_review")
+async def product_rating_skip(cb: CallbackQuery):
+    await cb.message.edit_text(
+        await home_text(cb.from_user.id, cb.from_user.first_name),
+        reply_markup=kb.main_menu(is_admin(cb.from_user.id))
+    )
+    await cb.answer()
+
 
 @router.callback_query(F.data == "balance")
 async def balance(cb: CallbackQuery):
@@ -189,6 +477,85 @@ async def topup_amount(message: Message, state: FSMContext):
                 reply_markup=kb.topup_review_menu(tid))
 
 
+@router.callback_query(F.data == "redeem_promo")
+async def redeem_promo_start(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(RedeemPromo.code)
+    await cb.message.edit_text(
+        "🎟️ <b>REDEEM PROMO CODE</b>\n\n"
+        "Please enter your promo code/gift card code to credit your balance:",
+        reply_markup=kb.back_menu()
+    )
+    await cb.answer()
+
+
+@router.message(RedeemPromo.code)
+async def redeem_promo_save(message: Message, state: FSMContext):
+    code = message.text.strip().upper()
+    await state.clear()
+    
+    promo = await db.get_promo_code(code)
+    if not promo:
+        return await message.answer("❌ Invalid promo code!", reply_markup=kb.back_menu())
+        
+    if promo[3] is not None and promo[4] >= promo[3]:
+        return await message.answer("❌ This promo code has reached its maximum usage limit!", reply_markup=kb.back_menu())
+        
+    if await db.is_promo_used(code, message.from_user.id):
+        return await message.answer("❌ You have already redeemed this promo code!", reply_markup=kb.back_menu())
+        
+    if promo[1] != 'balance':
+        return await message.answer("❌ This promo code is a discount coupon. Use it at checkout when purchasing a product.", reply_markup=kb.back_menu())
+        
+    success = await db.use_promo_code(code, message.from_user.id)
+    if not success:
+        return await message.answer("❌ Error redeeming code.", reply_markup=kb.back_menu())
+        
+    await db.update_balance(message.from_user.id, promo[2])
+    
+    await message.answer(
+        f"✅ <b>PROMO CODE REDEEMED!</b>\n{DIVIDER}\n\n"
+        f"Promo Code: <code>{code}</code>\n"
+        f"Balance Credited: <b>+${promo[2]:.2f}</b>\n\n"
+        f"Enjoy shopping! 🛍️",
+        reply_markup=kb.back_menu()
+    )
+
+
+@router.callback_query(F.data == "referrals")
+async def referrals_home(cb: CallbackQuery):
+    count, earnings = await db.get_referral_stats(cb.from_user.id)
+    from config import BOT_USERNAME
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{cb.from_user.id}"
+    
+    text = (
+        f"<b>👥 REFERRAL PROGRAM</b>\n{DIVIDER}\n\n"
+        f"Share your referral link with friends and earn <b>{REFERRAL_COMMISSION_PERCENT:.0f}% commission</b> on all their top-ups!\n\n"
+        f"🔗 <b>Your Referral Link:</b>\n<code>{ref_link}</code>\n\n"
+        f"📊 <b>Your Stats:</b>\n"
+        f"   • Total Invited: <b>{count} users</b>\n"
+        f"   • Commissions Earned: <b>${earnings:.2f}</b>\n\n"
+        f"<i>Commissions are credited instantly to your balance.</i>"
+    )
+    await cb.message.edit_text(text, reply_markup=kb.back_menu())
+    await cb.answer()
+
+
+@router.callback_query(F.data == "daily_claim")
+async def daily_claim_handler(cb: CallbackQuery):
+    can_claim = await db.can_claim_daily(cb.from_user.id)
+    if not can_claim:
+        return await cb.answer("❌ You have already claimed your daily reward today. Come back tomorrow!", show_alert=True)
+    
+    await db.claim_daily_reward(cb.from_user.id, DAILY_REWARD_AMOUNT)
+    await cb.message.edit_text(
+        f"<b>🎁 DAILY REWARD CLAIMED!</b>\n{DIVIDER}\n\n"
+        f"Congratulations! You have received a free credit of <b>${DAILY_REWARD_AMOUNT:.2f}</b> to your balance.\n\n"
+        f"Come back in 24 hours to claim another reward!",
+        reply_markup=kb.back_menu()
+    )
+    await cb.answer("Reward claimed!", show_alert=True)
+
+
 @router.callback_query(F.data == "orders")
 async def orders(cb: CallbackQuery):
     rows = await db.get_user_orders(cb.from_user.id)
@@ -206,12 +573,66 @@ async def orders(cb: CallbackQuery):
 
 
 @router.callback_query(F.data == "support")
-async def support(cb: CallbackQuery):
+async def support_menu_handler(cb: CallbackQuery):
     await cb.message.edit_text(
-        f"<b>💬 SUPPORT</b>\n{DIVIDER}\n\n👤 @{SUPPORT_USERNAME}\n\n"
-        f"⏱ Avg. response: 5–30 min\n\n{DIVIDER}",
-        reply_markup=kb.back_menu())
+        f"<b>💬 STORE SUPPORT</b>\n{DIVIDER}\n\n"
+        f"Need assistance? Open a support ticket directly inside the bot, or chat with us on Telegram.\n\n"
+        f"Avg. response time: 5–30 min\n\n{DIVIDER}",
+        reply_markup=kb.support_menu()
+    )
     await cb.answer()
+
+
+@router.callback_query(F.data == "open_ticket")
+async def open_ticket_handler(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(SupportTicket.message)
+    await cb.message.edit_text(
+        "🎫 <b>OPEN SUPPORT TICKET</b>\n\n"
+        "Please describe your issue in detail. You can send text or screenshot. "
+        "Our support agents will respond shortly.",
+        reply_markup=kb.back_menu()
+    )
+    await cb.answer()
+
+
+@router.message(SupportTicket.message)
+async def support_ticket_message(message: Message, state: FSMContext):
+    await state.clear()
+    
+    admins = ADMIN_IDS
+    sent_count = 0
+    for admin in admins:
+        try:
+            admin_text = (
+                f"🎫 <b>NEW SUPPORT TICKET</b>\n"
+                f"From User: <code>{message.from_user.id}</code> ({message.from_user.first_name})\n\n"
+                f"Message:"
+            )
+            if message.text:
+                await message.bot.send_message(
+                    admin,
+                    f"{admin_text}\n{message.text}",
+                    reply_markup=kb.admin_ticket_reply_menu(message.from_user.id)
+                )
+            elif message.photo:
+                await message.bot.send_photo(
+                    admin,
+                    photo=message.photo[-1].file_id,
+                    caption=f"{admin_text}\n[Photo Attachment] {message.caption or ''}",
+                    reply_markup=kb.admin_ticket_reply_menu(message.from_user.id)
+                )
+            sent_count += 1
+        except Exception:
+            pass
+            
+    if sent_count > 0:
+        await message.answer(
+            "✅ <b>Ticket Submitted.</b>\n"
+            "Your message has been forwarded to our support team. We will reply to you here shortly.",
+            reply_markup=kb.back_menu()
+        )
+    else:
+        await message.answer("❌ Error opening ticket. Please try again later or contact direct support.")
 
 
 @router.callback_query(F.data == "about")
