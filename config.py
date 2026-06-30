@@ -11,7 +11,7 @@ BINANCE_PAY_ID = os.getenv("BINANCE_PAY_ID", "N/A")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "your_username")
 
 DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
-DB_PATH = "store.db"
+DB_PATH = os.getenv("DB_PATH", "store.db")
 
 SENSITIVE_DELETE_AFTER = 30  # seconds
 ANTISPAM_RATE = 0.7          # min seconds between actions per user
