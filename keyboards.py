@@ -152,7 +152,10 @@ def admin_menu():
             InlineKeyboardButton(text="🚫 Ban User", callback_data="a_ban"),
             InlineKeyboardButton(text="✅ Unban User", callback_data="a_unban"),
         ],
-        [InlineKeyboardButton(text="⬅️ Back", callback_data="home")],
+        [
+            InlineKeyboardButton(text="📥 Backup DB", callback_data="a_backup"),
+            InlineKeyboardButton(text="⬅️ Back", callback_data="home"),
+        ],
     ])
 
 
