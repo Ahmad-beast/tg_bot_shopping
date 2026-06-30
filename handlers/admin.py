@@ -22,7 +22,7 @@ async def admin_home(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("⛔ Access Denied!", show_alert=True)
     await state.clear()
     await cb.message.edit_text(
-        f"<b>👑 ADMIN PANEL</b>\n{DIVIDER}\n\nManage your store below 👇",
+        f"<b>👑 ADMIN PANEL</b>\n{DIVIDER}\n\nManage your store below👇",
         reply_markup=kb.admin_menu())
     await cb.answer()
 
