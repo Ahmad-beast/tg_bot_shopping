@@ -27,6 +27,8 @@ LINK_MUTE_SECONDS = 60
 
 BOT_USERNAME = os.getenv("BOT_USERNAME")  # without @, e.g. shopflixd_bot
 
+REFERRAL_COMMISSION_PERCENT = 10.0  # 10% commission on top-ups
+DAILY_REWARD_AMOUNT = 0.05  # $0.05 daily check-in reward
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
