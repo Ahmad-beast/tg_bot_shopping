@@ -389,21 +389,6 @@ async def checkout_payment(cb: CallbackQuery, state: FSMContext):
     
     await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
     await cb.answer("✅ Purchase successful!", show_alert=True)
-    
-    from config import CHANNEL_ID
-    if CHANNEL_ID:
-        total_count, total_revenue = await db.order_stats()
-        with suppress(Exception):
-            await cb.bot.send_message(
-                CHANNEL_ID,
-                f"🎉 <b>NEW SALE!</b>\n{DIVIDER}\n\n"
-                f"{p[1]} <b>{p[2]}</b> (x{qty})\n"
-                f"💵 Price paid: <b>${price:.2f}</b>\n\n"
-                f"📊 <b>Total sales:</b> {total_count}\n"
-                f"💰 <b>Total revenue:</b> ${total_revenue:.2f}\n\n"
-                f"🛒 Get yours now 👇",
-                reply_markup=kb.buy_now_kb(),
-            )
 
 
 @router.callback_query(F.data.startswith("rate:"))
