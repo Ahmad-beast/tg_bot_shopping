@@ -1,20 +1,17 @@
 from contextlib import suppress
+import csv
+import io
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import CHANNEL_ID
-from states import ChannelPost
-from config import ADMIN_IDS, DIVIDER, is_admin, CHANNEL_ID
-
-
-import csv
-import io
-from states import (AddProduct, EditProduct, AddStock, Broadcast, AddBalance, BanUser, BulkUpload, UserLookup, CustomBalance)
+from config import CHANNEL_ID, ADMIN_IDS, DIVIDER, is_admin
+from states import (
+    AddProduct, EditProduct, AddStock, Broadcast, AddBalance, BanUser, 
+    BulkUpload, UserLookup, CustomBalance, ChannelPost, AddCategory, AddPromo, AdminReplySupport
+)
 import database as db
 import keyboards as kb
-from config import ADMIN_IDS, DIVIDER, is_admin
-from states import AddProduct, EditProduct, AddStock, Broadcast, AddBalance, BanUser
 
 router = Router()
 
@@ -103,8 +100,50 @@ async def low_stock(cb: CallbackQuery):
 async def ap_start(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         return await cb.answer("⛔", show_alert=True)
-    await state.set_state(AddProduct.emoji)
-    await cb.message.edit_text("➕ <b>Add Product</b>\n\nSend an <b>emoji</b> (e.g. 🎬):")
+    
+    categories = await db.get_categories()
+    if not categories:
+        await state.update_data(category_id=None)
+        await state.set_state(AddProduct.details)
+        prompt = (
+            "➕ <b>Add Product (Quick Format)</b>\n\n"
+            "Please send the product details in a single message separated by <b>|</b>:\n\n"
+            "<code>Emoji | Name | Price | Description | Stock1 | Stock2 | ...</code>\n\n"
+            "<b>Example:</b>\n"
+            "<code>🎬 | Netflix Premium | 5.00 | 1 Month UHD. | acc1:pass | acc2:pass</code>\n\n"
+            "<i>Formatting (spoilers, bold, quotes) is supported in the description!</i>"
+        )
+        await cb.message.edit_text(prompt, reply_markup=kb.admin_back())
+        return await cb.answer()
+        
+    rows = []
+    for c in categories:
+        rows.append([InlineKeyboardButton(text=f"📁 {c[2]}", callback_data=f"ap_cat:{c[0]}")])
+    rows.append([InlineKeyboardButton(text="❌ No Category", callback_data="ap_cat:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="admin")])
+    
+    await cb.message.edit_text(
+        "➕ <b>Add Product</b>\n\nSelect the product category:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("ap_cat:"))
+async def ap_cat_selected(cb: CallbackQuery, state: FSMContext):
+    val = cb.data.split(":")[1]
+    cat_id = None if val == "none" else int(val)
+    await state.update_data(category_id=cat_id)
+    await state.set_state(AddProduct.details)
+    prompt = (
+        "➕ <b>Add Product (Quick Format)</b>\n\n"
+        "Please send the product details in a single message separated by <b>|</b>:\n\n"
+        "<code>Emoji | Name | Price | Description | Stock1 | Stock2 | ...</code>\n\n"
+        "<b>Example:</b>\n"
+        "<code>🎬 | Netflix Premium | 5.00 | 1 Month UHD. | acc1:pass | acc2:pass</code>\n\n"
+        "<i>Formatting (spoilers, bold, quotes) is supported in the description!</i>"
+    )
+    await cb.message.edit_text(prompt, reply_markup=kb.admin_back())
     await cb.answer()
 
 
@@ -204,86 +243,78 @@ async def bulk_process(m: Message, state: FSMContext):
             with suppress(Exception):
                 await m.bot.send_message(CHANNEL_ID, announce, reply_markup=kb.buy_now_kb())
 
-
-
-@router.message(BulkUpload.file)
-async def bulk_no_file(m: Message):
-    await m.answer("❌ Please upload a .csv <b>file</b> (not text).")
-
-
-@router.message(AddProduct.emoji)
-async def ap_emoji(m: Message, state: FSMContext):
-    await state.update_data(emoji=m.text)
-    await state.set_state(AddProduct.name)
-    await m.answer("Send product <b>name</b>:")
-
-
-@router.message(AddProduct.name)
-async def ap_name(m: Message, state: FSMContext):
-    await state.update_data(name=m.text)
-    await state.set_state(AddProduct.price)
-    await m.answer("Send <b>price</b> (USD, e.g. 5):")
-
-
-@router.message(AddProduct.price)
-async def ap_price(m: Message, state: FSMContext):
+@router.message(AddProduct.details)
+async def ap_details(m: Message, state: FSMContext):
+    text = m.text or ""
+    html = m.html_text or ""
+    
+    parts = [p.strip() for p in text.split("|")]
+    html_parts = [p.strip() for p in html.split("|")]
+    
+    if len(parts) < 4:
+        return await m.answer(
+            "❌ <b>Invalid format!</b>\n\n"
+            "Please make sure you have at least 4 parts: Emoji, Name, Price, and Description separated by <b>|</b>.\n\n"
+            "<b>Example:</b>\n"
+            "<code>🎬 | Netflix Premium | 5.00 | 1 Month UHD. | acc1:pass | acc2:pass</code>"
+        )
+        
+    emoji = parts[0]
+    name = parts[1]
+    price_str = parts[2]
+    desc = html_parts[3]
+    
     try:
-        price = float(m.text)
+        price = float(price_str)
         if price < 0:
             raise ValueError
     except ValueError:
-        return await m.answer("❌ Enter a valid price.")
-    await state.update_data(price=price)
-    await state.set_state(AddProduct.desc)
-    await m.answer("Send a short <b>description</b>:")
-
-
-@router.message(AddProduct.desc)
-async def ap_desc(m: Message, state: FSMContext):
-    await state.update_data(desc=m.text)
-    await state.set_state(AddProduct.stock)
-    await m.answer(
-        "Send the <b>stock items</b> (accounts/keys/IDs).\n"
-        "One item per line — each line is delivered to one buyer:")
-
-
-@router.message(AddProduct.stock)
-async def ap_stock(m: Message, state: FSMContext):
+        return await m.answer("❌ Please enter a valid positive number for the price.")
+        
+    stock_items = parts[4:]
+    stock_items = [s for s in stock_items if s]
+    
     data = await state.get_data()
-    items = [line.strip() for line in m.text.splitlines() if line.strip()]
-    pid = await db.add_product(data["emoji"], data["name"], data["price"], data["desc"])
-    if items:
-        await db.add_stock_items(pid, items)
+    category_id = data.get("category_id")
     await state.clear()
+    
+    pid = await db.add_product(emoji, name, price, desc, category_id)
+    if stock_items:
+        await db.add_stock_items(pid, stock_items)
+        
     await m.answer(
-        f"✅ Product <b>{data['name']}</b> added with {len(items)} stock item(s)!",
-        reply_markup=kb.admin_back())
-
-    # Notify all users about the new product
+        f"✅ Product <b>{name}</b> added successfully with {len(stock_items)} stock item(s)!",
+        reply_markup=kb.admin_back()
+    )
+    
     announce = (
         f"🆕 <b>NEW PRODUCT AVAILABLE!</b>\n{DIVIDER}\n\n"
-        f"{data['emoji']} <b>{data['name']}</b>\n\n"
-        f"{data['desc']}\n\n💰 <b>Price:</b> ${data['price']:.2f}\n\n"
-        f"Open the store and grab it now! 🛒")
+        f"{emoji} <b>{name}</b>\n\n"
+        f"{desc}\n\n💰 <b>Price:</b> ${price:.2f}\n\n"
+        f"Open the store and grab it now! 🛒"
+    )
     sent = 0
     for uid in await db.all_user_ids():
         with suppress(Exception):
             await m.bot.send_message(uid, announce)
             sent += 1
     await m.answer(f"📢 New product announced to {sent} user(s).")
-    # Auto-post new product to the channel (with price + Buy Now button)
+    
     if CHANNEL_ID:
         with suppress(Exception):
             await m.bot.send_message(
                 CHANNEL_ID,
                 f"🆕 <b>NEW PRODUCT!</b>\n{DIVIDER}\n\n"
-                f"{data['emoji']} <b>{data['name']}</b>\n\n"
-                f"{data['desc']}\n\n💰 <b>Price:</b> ${data['price']:.2f}\n\n"
+                f"{emoji} <b>{name}</b>\n\n"
+                f"{desc}\n\n💰 <b>Price:</b> ${price:.2f}\n\n"
                 f"🛒 Available now 👇",
                 reply_markup=kb.buy_now_kb(),
             )
 
 
+@router.message(BulkUpload.file)
+async def bulk_no_file(m: Message):
+    await m.answer("❌ Please upload a .csv <b>file</b> (not text).")
 
 
 # ---------- LIST / MANAGE PRODUCTS ----------
@@ -348,7 +379,7 @@ async def edit_prod(cb: CallbackQuery, state: FSMContext):
 @router.message(EditProduct.value)
 async def edit_value(m: Message, state: FSMContext):
     data = await state.get_data()
-    field, value = data["field"], m.text
+    field, value = data["field"], m.html_text if data["field"] == "desc" else m.text
     if field == "price":
         try:
             value = float(value)
@@ -493,11 +524,38 @@ async def topup_approve(cb: CallbackQuery):
     tu = await db.get_topup(tid)
     if not tu or tu[3] != "pending":
         return await cb.answer("Already handled.", show_alert=True)
-    await db.update_balance(tu[1], tu[2])
+        
+    user_id = tu[1]
+    amount = tu[2]
+    
+    await db.update_balance(user_id, amount)
     await db.set_topup_status(tid, "approved")
-    await cb.message.edit_text(f"✅ Top-up #{tid} approved. ${tu[2]:.2f} credited.")
+    await cb.message.edit_text(f"✅ Top-up #{tid} approved. ${amount:.2f} credited.")
+    
     with suppress(Exception):
-        await cb.bot.send_message(tu[1], f"✅ Your top-up of ${tu[2]:.2f} was approved!")
+        await cb.bot.send_message(user_id, f"✅ Your top-up of ${amount:.2f} was approved!")
+        
+    # Check for referral commission
+    from config import REFERRAL_COMMISSION_PERCENT
+    import aiosqlite
+    try:
+        async with aiosqlite.connect(db.DB_PATH) as conn:
+            async with conn.execute("SELECT referred_by FROM users WHERE user_id=?", (user_id,)) as cur:
+                row = await cur.fetchone()
+                referrer_id = row[0] if row else None
+        
+        if referrer_id:
+            commission = amount * (REFERRAL_COMMISSION_PERCENT / 100.0)
+            await db.add_referral_earnings(referrer_id, commission)
+            with suppress(Exception):
+                await cb.bot.send_message(
+                    referrer_id,
+                    f"💰 <b>Referral Commission Received!</b>\n\n"
+                    f"Your invitee topped up ${amount:.2f}. You earned a <b>{REFERRAL_COMMISSION_PERCENT:.0f}% commission</b> of <b>+${commission:.2f}</b>!"
+                )
+    except Exception:
+        pass
+        
     await cb.answer("Approved")
 
 
@@ -558,21 +616,159 @@ async def bc_start(cb: CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id):
         return await cb.answer("⛔", show_alert=True)
     await state.set_state(Broadcast.message)
-    await cb.message.edit_text("📢 Send the <b>message</b> to broadcast to all users:")
+    await cb.message.edit_text(
+        "📢 <b>Rich Broadcast Campaign</b>\n\n"
+        "Send your broadcast content now. It can be:\n"
+        "• A plain <b>text message</b> with HTML formatting.\n"
+        "• A <b>photo banner</b> with a formatted caption.\n\n"
+        "Formatting (bold, italic, links) is fully supported.",
+        reply_markup=kb.admin_back()
+    )
     await cb.answer()
 
 
 @router.message(Broadcast.message)
-async def bc_send(m: Message, state: FSMContext):
+async def bc_capture_message(m: Message, state: FSMContext):
+    text_content = m.html_text if m.text else (m.caption or "")
+    photo_file_id = m.photo[-1].file_id if m.photo else None
+    
+    await state.update_data(
+        bc_text=text_content,
+        bc_photo=photo_file_id
+    )
+    
+    await state.set_state(Broadcast.button_choice)
+    await m.answer(
+        "⚡ <b>Content Captured!</b>\n\n"
+        "Do you want to attach an interactive button to this broadcast?",
+        reply_markup=kb.broadcast_button_choice_menu()
+    )
+
+
+@router.callback_query(F.data.startswith("bc_btn:"), Broadcast.button_choice)
+async def bc_button_chosen(cb: CallbackQuery, state: FSMContext):
+    choice = cb.data.split(":")[1]
+    
+    if choice == "none":
+        await execute_broadcast(cb.message, state, button_text=None, button_url=None)
+        await cb.answer()
+    elif choice == "prod":
+        products = await db.get_products()
+        if not products:
+            await cb.answer("❌ No products available to link! Please create one first.", show_alert=True)
+            return
+        await state.set_state(Broadcast.product_select)
+        await cb.message.edit_text(
+            "🛒 <b>Link a Product</b>\n\nSelect the product you want to attach as a 'Buy Now' button:",
+            reply_markup=kb.broadcast_products_list(products)
+        )
+        await cb.answer()
+    elif choice == "custom":
+        await state.set_state(Broadcast.custom_button)
+        await cb.message.edit_text(
+            "🔗 <b>Custom URL Button</b>\n\n"
+            "Please send the button label and URL in this format:\n\n"
+            "<code>Button Label | https://yourlink.com</code>\n\n"
+            "Example:\n"
+            "<code>Join Channel | https://t.me/shoppingxchannel</code>",
+            reply_markup=kb.admin_back()
+        )
+        await cb.answer()
+
+
+@router.callback_query(F.data.startswith("bc_prod:"), Broadcast.product_select)
+async def bc_product_selected(cb: CallbackQuery, state: FSMContext):
+    pid = int(cb.data.split(":")[1])
+    p = await db.get_product(pid)
+    if not p:
+        await cb.answer("Product not found!", show_alert=True)
+        return
+        
+    from config import BOT_USERNAME
+    if not BOT_USERNAME:
+        await cb.answer("❌ BOT_USERNAME not set in .env! Cannot build product deep-links.", show_alert=True)
+        return
+        
+    button_text = f"🛒 Buy {p[2]}"
+    button_url = f"https://t.me/{BOT_USERNAME}?start=prod_{pid}"
+    
+    await execute_broadcast(cb.message, state, button_text, button_url)
+    await cb.answer()
+
+
+@router.message(Broadcast.custom_button)
+async def bc_custom_button_save(m: Message, state: FSMContext):
+    text = m.text.strip()
+    if "|" not in text:
+        return await m.answer("❌ Invalid format! Please enter as: <code>Button Label | URL</code>")
+        
+    parts = text.split("|")
+    label = parts[0].strip()
+    url = parts[1].strip()
+    
+    if not (url.startswith("http://") or url.startswith("https://") or url.startswith("tg://")):
+        return await m.answer("❌ Invalid URL! Must start with http://, https://, or tg://")
+        
+    await execute_broadcast(m, state, label, url)
+
+
+async def execute_broadcast(message_obj, state: FSMContext, button_text=None, button_url=None):
+    data = await state.get_data()
+    text = data.get("bc_text", "")
+    photo = data.get("bc_photo")
     await state.clear()
+    
+    reply_markup = None
+    if button_text and button_url:
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=button_text, url=button_url)]
+        ])
+        
+    progress_msg = None
+    if isinstance(message_obj, Message):
+        progress_msg = await message_obj.answer("⏳ Sending broadcast to all users...")
+    else:
+        progress_msg = await message_obj.answer("⏳ Sending broadcast to all users...")
+        with suppress(Exception):
+            await message_obj.delete()
+            
     sent, failed = 0, 0
-    for uid in await db.all_user_ids():
+    uids = await db.all_user_ids()
+    
+    for uid in uids:
         try:
-            await m.bot.send_message(uid, f"📢 <b>Announcement</b>\n\n{m.html_text}")
+            if photo:
+                await message_obj.bot.send_photo(
+                    chat_id=uid,
+                    photo=photo,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            else:
+                await message_obj.bot.send_message(
+                    chat_id=uid,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
             sent += 1
         except Exception:
             failed += 1
-    await m.answer(f"✅ Broadcast done.\nSent: {sent} | Failed: {failed}", reply_markup=kb.admin_back())
+            
+    with suppress(Exception):
+        await progress_msg.delete()
+        
+    result_text = (
+        f"✅ <b>Broadcast Campaign Complete!</b>\n{DIVIDER}\n\n"
+        f"👤 Total Sent: <b>{sent}</b>\n"
+        f"❌ Failed/Blocked: <b>{failed}</b>"
+    )
+    
+    if isinstance(message_obj, Message):
+        await message_obj.answer(result_text, reply_markup=kb.admin_back())
+    else:
+        await message_obj.bot.send_message(message_obj.chat.id, result_text, reply_markup=kb.admin_back())
 
 
 # ---------- POST TO CHANNEL ----------
@@ -637,4 +833,270 @@ async def lookup_run(m: Message, state: FSMContext):
         f"👥 <b>RESULTS</b>\n{DIVIDER}\n\n{body}\n\n"
         f"<i>Send a user ID via 💳 Add Balance to credit.</i>",
         reply_markup=kb.admin_back())
+
+
+# ---------- CATEGORIES MANAGEMENT ----------
+@router.callback_query(F.data == "a_categories")
+async def a_categories(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    cats = await db.get_categories()
+    rows = []
+    for c in cats:
+        rows.append([
+            InlineKeyboardButton(text=f"{c[1]} {c[2]}", callback_data="noop"),
+            InlineKeyboardButton(text="🗑️ Delete", callback_data=f"delcat:{c[0]}")
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Add Category", callback_data="a_addcat")])
+    rows.append([InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin")])
+    
+    await cb.message.edit_text(
+        f"<b>📂 MANAGE CATEGORIES</b>\n{DIVIDER}\n\nList of categories:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a_addcat")
+async def a_addcat_start(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    await state.set_state(AddCategory.emoji)
+    await cb.message.edit_text("➕ <b>Add Category</b>\n\nSend a category <b>emoji</b> (e.g. 🔑):")
+    await cb.answer()
+
+
+@router.message(AddCategory.emoji)
+async def a_addcat_emoji(m: Message, state: FSMContext):
+    await state.update_data(emoji=m.text.strip())
+    await state.set_state(AddCategory.name)
+    await m.answer("Send category <b>name</b>:")
+
+
+@router.message(AddCategory.name)
+async def a_addcat_name(m: Message, state: FSMContext):
+    data = await state.get_data()
+    name = m.text.strip()
+    emoji = data.get("emoji", "📁")
+    await db.add_category(emoji, name)
+    await state.clear()
+    await m.answer(f"✅ Category <b>{emoji} {name}</b> added successfully!", reply_markup=kb.admin_back())
+
+
+@router.callback_query(F.data.startswith("delcat:"))
+async def a_delcat(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    cid = int(cb.data.split(":")[1])
+    await db.delete_category(cid)
+    await cb.message.edit_text("🗑️ Category deleted successfully.", reply_markup=kb.admin_back())
+    await cb.answer()
+
+
+# ---------- PROMO CODES MANAGEMENT ----------
+@router.callback_query(F.data == "a_promos")
+async def a_promos(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    promos = await db.get_all_promos()
+    rows = []
+    for p in promos:
+        type_lbl = "Gift Card" if p[1] == "balance" else ("%" if p[1] == "percentage" else "$")
+        val_lbl = f"${p[2]:.2f}" if p[1] != "percentage" else f"{p[2]:.0f}%"
+        rows.append([
+            InlineKeyboardButton(text=f"🔑 {p[0]} ({type_lbl}: {val_lbl}) • {p[4]}/{p[3] or '∞'}", callback_data="noop"),
+            InlineKeyboardButton(text="🗑️", callback_data=f"delpromo:{p[0]}")
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Create Promo Code", callback_data="a_addpromo")])
+    rows.append([InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin")])
+    
+    await cb.message.edit_text(
+        f"<b>🎟️ MANAGE PROMO CODES</b>\n{DIVIDER}\n\nList of active promo codes:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a_addpromo")
+async def a_addpromo_start(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    await state.set_state(AddPromo.code)
+    await cb.message.edit_text("🎟️ <b>Create Promo Code</b>\n\nEnter the promo <b>code</b> name (e.g. SAVE20):")
+    await cb.answer()
+
+
+@router.message(AddPromo.code)
+async def a_addpromo_code(m: Message, state: FSMContext):
+    code = m.text.strip().upper()
+    await state.update_data(code=code)
+    
+    rows = [
+        [InlineKeyboardButton(text="💰 Gift Card (Credits Balance)", callback_data="ap_prtype:balance")],
+        [InlineKeyboardButton(text="📈 Percentage Discount (Checkout)", callback_data="ap_prtype:percentage")],
+        [InlineKeyboardButton(text="💵 Flat Discount (Checkout)", callback_data="ap_prtype:discount")],
+    ]
+    await m.answer(
+        f"Select promo code type for <code>{code}</code>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+
+
+@router.callback_query(F.data.startswith("ap_prtype:"))
+async def a_addpromo_type(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    ptype = cb.data.split(":")[1]
+    await state.update_data(type=ptype)
+    await state.set_state(AddPromo.value)
+    
+    prompt = "Enter flat dollar value (e.g. 5.00 for $5):" if ptype != "percentage" else "Enter discount percentage (e.g. 20 for 20%):"
+    await cb.message.edit_text(f"🎟️ <b>Create Promo Code</b>\n\n{prompt}")
+    await cb.answer()
+
+
+@router.message(AddPromo.value)
+async def a_addpromo_value(m: Message, state: FSMContext):
+    try:
+        val = float(m.text)
+        if val <= 0:
+            raise ValueError
+    except ValueError:
+        return await m.answer("❌ Please enter a valid positive number.")
+    
+    await state.update_data(value=val)
+    await state.set_state(AddPromo.max_uses)
+    await m.answer("Enter maximum allowed uses (integer, or 0 for unlimited):")
+
+
+@router.message(AddPromo.max_uses)
+async def a_addpromo_uses(m: Message, state: FSMContext):
+    try:
+        uses = int(m.text)
+        if uses < 0:
+            raise ValueError
+    except ValueError:
+        return await m.answer("❌ Please enter a valid non-negative integer.")
+        
+    data = await state.get_data()
+    code = data.get("code")
+    ptype = data.get("type")
+    val = data.get("value")
+    max_uses = None if uses == 0 else uses
+    
+    await db.add_promo_code(code, ptype, val, max_uses)
+    await state.clear()
+    
+    type_lbl = "Gift Card" if ptype == "balance" else ("Percentage" if ptype == "percentage" else "Flat Checkout")
+    await m.answer(
+        f"✅ <b>Promo Code Created!</b>\n{DIVIDER}\n\n"
+        f"🔑 Code: <code>{code}</code>\n"
+        f"🏷️ Type: <b>{type_lbl}</b>\n"
+        f"💰 Value: <b>{val}</b>\n"
+        f"🔢 Max Uses: <b>{uses if uses > 0 else 'Unlimited'}</b>",
+        reply_markup=kb.admin_back()
+    )
+
+
+@router.callback_query(F.data.startswith("delpromo:"))
+async def a_delpromo(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    code = cb.data.split(":")[1]
+    await db.delete_promo_code(code)
+    await cb.message.edit_text("🗑️ Promo code deleted successfully.", reply_markup=kb.admin_back())
+    await cb.answer()
+
+
+# ---------- SUPPORT TICKET ROUTING ----------
+@router.callback_query(F.data.startswith("t_reply:"))
+async def a_ticket_reply_start(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    uid = int(cb.data.split(":")[1])
+    await state.update_data(target_user_id=uid)
+    await state.set_state(AdminReplySupport.message)
+    
+    await cb.message.answer(
+        f"💬 <b>Reply to User</b> <code>{uid}</code>:\n"
+        f"Type your message below. It will be sent privately to this customer.",
+        reply_markup=kb.admin_back()
+    )
+    await cb.answer()
+
+
+@router.message(AdminReplySupport.message)
+async def a_ticket_reply_save(m: Message, state: FSMContext):
+    data = await state.get_data()
+    uid = data.get("target_user_id")
+    await state.clear()
+    
+    if not uid:
+        return await m.answer("❌ Target user ID not found.")
+        
+    try:
+        reply_text = (
+            f"💬 <b>SUPPORT REPLY</b>\n{DIVIDER}\n\n"
+            f"{m.text}"
+        )
+        if m.text:
+            await m.bot.send_message(uid, reply_text)
+        elif m.photo:
+            await m.bot.send_photo(uid, photo=m.photo[-1].file_id, caption=f"💬 <b>SUPPORT REPLY</b>\n{DIVIDER}\n\n{m.caption or ''}")
+            
+        await m.answer(f"✅ Reply sent to User <code>{uid}</code>.", reply_markup=kb.admin_back())
+    except Exception as e:
+        await m.answer(f"❌ Failed to send reply: {e}", reply_markup=kb.admin_back())
+
+
+@router.callback_query(F.data.startswith("a_ban_id:"))
+async def a_ticket_ban(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+    uid = int(cb.data.split(":")[1])
+    await db.set_banned(uid, True)
+    await cb.message.edit_text(f"🚫 User <code>{uid}</code> has been banned.", reply_markup=kb.admin_back())
+    await cb.answer()
+
+
+# ---------- PENDING TOPUPS MANAGEMENT ----------
+@router.callback_query(F.data == "a_topups_list")
+async def a_topups_list(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+        
+    topups = await db.get_pending_topups()
+    if not topups:
+        await cb.message.edit_text("⏳ <b>Pending Top-ups</b>\n\n✅ There are no pending top-up requests.", reply_markup=kb.admin_back())
+        return await cb.answer()
+        
+    await cb.message.edit_text(
+        f"⏳ <b>PENDING TOP-UPS</b>\n{DIVIDER}\n\nSelect a request to review/approve 👇",
+        reply_markup=kb.pending_topups_menu(topups)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("a_tpreview:"))
+async def a_topup_preview(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔", show_alert=True)
+        
+    tid = int(cb.data.split(":")[1])
+    tu = await db.get_topup(tid)
+    if not tu:
+        return await cb.answer("Top-up request not found!", show_alert=True)
+        
+    prof = await db.user_profile(tu[1])
+    name = prof["name"] if prof else "Unknown"
+    
+    await cb.message.edit_text(
+        f"💳 <b>Top-up request #{tid}</b>\n{DIVIDER}\n\n"
+        f"User: <code>{tu[1]}</code> ({name})\n"
+        f"Amount: <b>${tu[2]:.2f}</b>\n"
+        f"Status: <b>{tu[3].upper()}</b>\n\n"
+        f"Verify the payment on Binance Pay, then approve/reject below:",
+        reply_markup=kb.topup_review_menu(tid)
+    )
+    await cb.answer()
 
