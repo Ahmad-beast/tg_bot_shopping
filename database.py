@@ -6,19 +6,28 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id   INTEGER PRIMARY KEY,
-                name      TEXT,
-                balance   REAL DEFAULT 0,
-                banned    INTEGER DEFAULT 0,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                user_id           INTEGER PRIMARY KEY,
+                name              TEXT,
+                balance           REAL DEFAULT 0,
+                banned            INTEGER DEFAULT 0,
+                joined_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                referred_by       INTEGER DEFAULT NULL,
+                referral_earnings REAL DEFAULT 0.0
+            )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS categories (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                emoji TEXT DEFAULT '📁',
+                name  TEXT
             )""")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS products (
-                id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                emoji TEXT DEFAULT '📦',
-                name  TEXT,
-                price REAL,
-                desc  TEXT
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER DEFAULT NULL,
+                emoji       TEXT DEFAULT '📦',
+                name        TEXT,
+                price       REAL,
+                desc        TEXT
             )""")
         # Each delivery item (account/key) for a product. Sold when bought.
         await db.execute("""
@@ -45,6 +54,36 @@ async def init_db():
                 status     TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code       TEXT PRIMARY KEY,
+                type       TEXT,
+                value      REAL,
+                max_uses   INTEGER,
+                used_count INTEGER DEFAULT 0,
+                expiry     TIMESTAMP DEFAULT NULL
+            )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS promo_redemptions (
+                code        TEXT,
+                user_id     INTEGER,
+                redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (code, user_id)
+            )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_claims (
+                user_id         INTEGER PRIMARY KEY,
+                last_claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reviews (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER,
+                product_id INTEGER,
+                rating     INTEGER,
+                comment    TEXT DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
         await db.commit()
 
     # Run migrations for older databases (adds any missing columns)
@@ -58,6 +97,9 @@ async def _migrate():
         ("users", "banned", "INTEGER DEFAULT 0"),
         ("users", "balance", "REAL DEFAULT 0"),
         ("users", "joined_at", "TIMESTAMP"),
+        ("users", "referred_by", "INTEGER DEFAULT NULL"),
+        ("users", "referral_earnings", "REAL DEFAULT 0.0"),
+        ("products", "category_id", "INTEGER DEFAULT NULL"),
         ("products", "emoji", "TEXT DEFAULT '📦'"),
         ("products", "desc", "TEXT"),
         ("orders", "content", "TEXT"),
@@ -142,24 +184,28 @@ async def user_profile(user_id):
 
 
 # ---------- PRODUCTS ----------
-async def add_product(emoji, name, price, desc):
+async def add_product(emoji, name, price, desc, category_id=None):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO products (emoji,name,price,desc) VALUES (?,?,?,?)",
-            (emoji, name, price, desc))
+            "INSERT INTO products (emoji,name,price,desc,category_id) VALUES (?,?,?,?,?)",
+            (emoji, name, price, desc, category_id))
         await db.commit()
         return cur.lastrowid
 
 
-async def get_products():
+async def get_products(category_id=None):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT id,emoji,name,price,desc FROM products") as c:
-            return await c.fetchall()
+        if category_id is not None:
+            async with db.execute("SELECT id,emoji,name,price,desc,category_id FROM products WHERE category_id=?", (category_id,)) as c:
+                return await c.fetchall()
+        else:
+            async with db.execute("SELECT id,emoji,name,price,desc,category_id FROM products") as c:
+                return await c.fetchall()
 
 
 async def get_product(pid):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT id,emoji,name,price,desc FROM products WHERE id=?", (pid,)) as c:
+        async with db.execute("SELECT id,emoji,name,price,desc,category_id FROM products WHERE id=?", (pid,)) as c:
             return await c.fetchone()
 
 
@@ -193,18 +239,26 @@ async def stock_count(product_id):
             return (await c.fetchone())[0]
 
 
-async def take_one_stock(product_id):
-    """Atomically fetch + mark one unsold item as sold. Returns content or None."""
+async def take_stock_items(product_id, quantity):
+    """Atomically fetch + mark N unsold items as sold. Returns list of contents, or empty list if insufficient."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT id, content FROM stock_items WHERE product_id=? AND sold=0 LIMIT 1",
-            (product_id,)) as c:
-            row = await c.fetchone()
-        if not row:
-            return None
-        await db.execute("UPDATE stock_items SET sold=1 WHERE id=?", (row[0],))
+            "SELECT id, content FROM stock_items WHERE product_id=? AND sold=0 LIMIT ?",
+            (product_id, quantity)) as c:
+            rows = await c.fetchall()
+        if len(rows) < quantity:
+            return []
+        ids = [r[0] for r in rows]
+        placeholders = ",".join("?" for _ in ids)
+        await db.execute(f"UPDATE stock_items SET sold=1 WHERE id IN ({placeholders})", ids)
         await db.commit()
-        return row[1]
+        return [r[1] for r in rows]
+
+
+async def take_one_stock(product_id):
+    """Atomically fetch + mark one unsold item as sold. Returns content or None."""
+    res = await take_stock_items(product_id, 1)
+    return res[0] if res else None
 
 
 # ---------- ORDERS ----------
@@ -326,4 +380,147 @@ async def recent_users(limit=10):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT user_id, name, balance FROM users ORDER BY rowid DESC LIMIT ?", (limit,)) as c:
+            return await c.fetchall()
+
+
+# ---------- CATEGORIES ----------
+async def add_category(emoji, name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("INSERT INTO categories (emoji, name) VALUES (?, ?)", (emoji, name))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_categories():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id, emoji, name FROM categories") as c:
+            return await c.fetchall()
+
+
+async def get_category(cid):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id, emoji, name FROM categories WHERE id=?", (cid,)) as c:
+            return await c.fetchone()
+
+
+async def delete_category(cid):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM categories WHERE id=?", (cid,))
+        await db.execute("UPDATE products SET category_id=NULL WHERE category_id=?", (cid,))
+        await db.commit()
+
+
+# ---------- REFERRALS ----------
+async def set_referrer(user_id, referrer_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT referred_by FROM users WHERE user_id=?", (user_id,)) as c:
+            row = await c.fetchone()
+        if row and row[0] is None:
+            if referrer_id != user_id:
+                await db.execute("UPDATE users SET referred_by=? WHERE user_id=?", (referrer_id, user_id))
+                await db.commit()
+
+
+async def get_referral_stats(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (user_id,)) as c:
+            count = (await c.fetchone())[0]
+        async with db.execute("SELECT referral_earnings FROM users WHERE user_id=?", (user_id,)) as c:
+            earnings_row = await c.fetchone()
+            earnings = earnings_row[0] if earnings_row else 0.0
+        return count, earnings
+
+
+async def add_referral_earnings(user_id, amount):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET balance=balance+?, referral_earnings=referral_earnings+? WHERE user_id=?", (amount, amount, user_id))
+        await db.commit()
+
+
+# ---------- PROMO CODES ----------
+async def add_promo_code(code, type_, value, max_uses, expiry=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO promo_codes (code, type, value, max_uses, expiry) VALUES (?, ?, ?, ?, ?)",
+                         (code.upper(), type_, value, max_uses, expiry))
+        await db.commit()
+
+
+async def get_promo_code(code):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT code, type, value, max_uses, used_count, expiry FROM promo_codes WHERE code=?", (code.upper(),)) as c:
+            return await c.fetchone()
+
+
+async def get_all_promos():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT code, type, value, max_uses, used_count, expiry FROM promo_codes") as c:
+            return await c.fetchall()
+
+
+async def is_promo_used(code, user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT 1 FROM promo_redemptions WHERE code=? AND user_id=?", (code.upper(), user_id)) as c:
+            return (await c.fetchone()) is not None
+
+
+async def use_promo_code(code, user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT 1 FROM promo_redemptions WHERE code=? AND user_id=?", (code.upper(), user_id)) as c:
+            if await c.fetchone():
+                return False
+        await db.execute("INSERT INTO promo_redemptions (code, user_id) VALUES (?, ?)", (code.upper(), user_id))
+        await db.execute("UPDATE promo_codes SET used_count=used_count+1 WHERE code=?", (code.upper(),))
+        await db.commit()
+        return True
+
+
+async def delete_promo_code(code):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM promo_codes WHERE code=?", (code.upper(),))
+        await db.execute("DELETE FROM promo_redemptions WHERE code=?", (code.upper(),))
+        await db.commit()
+
+
+# ---------- DAILY REWARDS ----------
+async def can_claim_daily(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM daily_claims WHERE user_id=? AND last_claimed_at > datetime('now', '-24 hours')",
+            (user_id,)) as c:
+            return (await c.fetchone()) is None
+
+
+async def claim_daily_reward(user_id, amount):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO daily_claims (user_id, last_claimed_at) VALUES (?, datetime('now'))",
+            (user_id,))
+        await db.execute("UPDATE users SET balance=balance+? WHERE user_id=?", (amount, user_id))
+        await db.commit()
+
+
+# ---------- REVIEWS ----------
+async def add_review(user_id, product_id, rating, comment=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO reviews (user_id, product_id, rating, comment) VALUES (?, ?, ?, ?)",
+            (user_id, product_id, rating, comment))
+        await db.commit()
+
+
+async def get_product_rating(product_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COALESCE(AVG(rating), 0.0), COUNT(rating) FROM reviews WHERE product_id=?",
+            (product_id,)) as c:
+            row = await c.fetchone()
+            return row[0], row[1]
+
+
+async def get_pending_topups():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT t.id, t.user_id, t.amount, COALESCE(u.name, 'Unknown') "
+            "FROM topups t LEFT JOIN users u ON u.user_id=t.user_id "
+            "WHERE t.status='pending'") as c:
             return await c.fetchall()
