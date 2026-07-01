@@ -76,7 +76,7 @@ async def start(message: Message):
                 f"{rating_line}\n"
                 f"{stock_line}\n\n{DIVIDER}"
             )
-            return await message.answer(text, reply_markup=kb.product_detail_menu(prod_id, cnt > 0, category_id=p[5]))
+            return await message.answer(text, reply_markup=kb.product_detail_menu(prod_id, cnt > 0, category_id=p[5], is_free=(p[3] == 0)))
 
     await message.answer(
         await home_text(message.from_user.id, message.from_user.first_name),
@@ -172,8 +172,59 @@ async def view_product(cb: CallbackQuery):
         f"{rating_line}\n"
         f"{stock_line}\n\n{DIVIDER}"
     )
-    await cb.message.edit_text(text, reply_markup=kb.product_detail_menu(pid, cnt > 0, category_id=p[5]))
+    await cb.message.edit_text(text, reply_markup=kb.product_detail_menu(pid, cnt > 0, category_id=p[5], is_free=(p[3] == 0)))
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("claim_free:"))
+async def claim_free_product(cb: CallbackQuery):
+    pid = int(cb.data.split(":")[1])
+    p = await db.get_product(pid)
+    if not p:
+        return await cb.answer("Product not found!", show_alert=True)
+        
+    if p[3] != 0:
+        return await cb.answer("❌ This is not a free product!", show_alert=True)
+        
+    cnt = await db.stock_count(pid)
+    if cnt <= 0:
+        return await cb.answer("❌ Out of stock!", show_alert=True)
+        
+    cooldown = await db.get_claim_cooldown(cb.from_user.id, pid)
+    if cooldown > 0:
+        hours = int(cooldown // 3600)
+        minutes = int((cooldown % 3600) // 60)
+        seconds = int(cooldown % 60)
+        
+        time_str = ""
+        if hours > 0:
+            time_str += f"{hours}h "
+        if minutes > 0 or hours > 0:
+            time_str += f"{minutes}m "
+        time_str += f"{seconds}s"
+        
+        return await cb.answer(
+            f"⚠️ You can only claim this once every 12 hours!\nTry again in {time_str}.",
+            show_alert=True
+        )
+        
+    items = await db.take_stock_items(pid, 1)
+    if not items:
+        return await cb.answer("❌ Out of stock!", show_alert=True)
+        
+    await db.add_free_claim(cb.from_user.id, pid)
+    await db.add_order(cb.from_user.id, p[2], items[0], 0.0)
+    
+    delivered = (
+        f"<b>🎁 FREE CLAIM SUCCESSFUL</b>\n{DIVIDER}\n\n"
+        f"📦 Product: {p[1]} <b>{p[2]}</b>\n\n"
+        f"🔐 <b>Your claimed account / key</b>:\n"
+        f"<code>{items[0]}</code>\n\n"
+        f"<i>Please rate your claim below! ⭐️</i>"
+    )
+    
+    await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
+    await cb.answer("🎁 Claim successful!", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("buy_qty:"))
