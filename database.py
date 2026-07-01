@@ -76,6 +76,13 @@ async def init_db():
                 last_claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS free_claims (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER,
+                product_id INTEGER,
+                claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id    INTEGER,
@@ -524,3 +531,34 @@ async def get_pending_topups():
             "FROM topups t LEFT JOIN users u ON u.user_id=t.user_id "
             "WHERE t.status='pending'") as c:
             return await c.fetchall()
+
+
+# ---------- FREE CLAIMS ----------
+async def get_claim_cooldown(user_id, product_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT strftime('%s', 'now') - strftime('%s', claimed_at) "
+            "FROM free_claims "
+            "WHERE user_id = ? AND product_id = ? "
+            "ORDER BY claimed_at DESC LIMIT 1",
+            (user_id, product_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return 0
+            elapsed = row[0]
+            if elapsed is None:
+                return 0
+            cooldown = 12 * 3600  # 12 hours in seconds
+            if elapsed < cooldown:
+                return cooldown - elapsed
+            return 0
+
+
+async def add_free_claim(user_id, product_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO free_claims (user_id, product_id) VALUES (?, ?)",
+            (user_id, product_id)
+        )
+        await db.commit()
