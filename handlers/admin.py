@@ -22,7 +22,7 @@ async def admin_home(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("⛔ Access Denied!", show_alert=True)
     await state.clear()
     await cb.message.edit_text(
-        f"<b>👑 ADMIN PANEL</b>\n{DIVIDER}\n\nManage your store below👇",
+        f"<b>👑 ADMIN PANEL</b>\n{DIVIDER}\n\nManage your store below 👇",
         reply_markup=kb.admin_menu())
     await cb.answer()
 
@@ -399,14 +399,22 @@ async def addstock_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(pid=pid)
     await state.set_state(AddStock.items)
     await cb.message.edit_text(
-        "➕ <b>Add Stock</b>\n\nSend stock items (one account/key/ID per line):")
+        "➕ <b>Add Stock</b>\n\n"
+        "Send stock items (separate by line or using the <b>|</b> sign):"
+    )
     await cb.answer()
 
 
 @router.message(AddStock.items)
 async def addstock_save(m: Message, state: FSMContext):
     data = await state.get_data()
-    items = [line.strip() for line in m.text.splitlines() if line.strip()]
+    items = []
+    if m.text:
+        for line in m.text.splitlines():
+            for part in line.split("|"):
+                if part.strip():
+                    items.append(part.strip())
+                    
     if items:
         await db.add_stock_items(data["pid"], items)
     await state.clear()
