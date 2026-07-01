@@ -54,10 +54,13 @@ def products_menu(products, stocks, category_id="all"):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def product_detail_menu(pid, in_stock, category_id=None):
+def product_detail_menu(pid, in_stock, category_id=None, is_free=False):
     rows = []
     if in_stock:
-        rows.append([InlineKeyboardButton(text="✅ Buy with Balance", callback_data=f"buy_qty:{pid}")])
+        if is_free:
+            rows.append([InlineKeyboardButton(text="🎁 Claim Free", callback_data=f"claim_free:{pid}")])
+        else:
+            rows.append([InlineKeyboardButton(text="✅ Buy with Balance", callback_data=f"buy_qty:{pid}")])
     
     back_cb = f"cat:{category_id}" if category_id else "products"
     rows.append([
