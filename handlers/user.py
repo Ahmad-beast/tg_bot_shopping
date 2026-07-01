@@ -13,7 +13,7 @@ from config import (
     MIN_TOPUP, is_admin, REFERRAL_COMMISSION_PERCENT, DAILY_REWARD_AMOUNT
 )
 from states import TopUp, BuyProduct, SupportTicket, ProductReview, RedeemPromo
-from subscription import is_subscribed, join_keyboard, join_text
+from subscription import is_subscribed, join_keyboard, join_text 
 
 router = Router()
 
