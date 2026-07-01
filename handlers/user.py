@@ -225,6 +225,7 @@ async def claim_free_product(cb: CallbackQuery):
     
     await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
     await cb.answer("🎁 Claim successful!", show_alert=True)
+    await check_and_alert_low_stock(cb.bot, pid)
 
 
 @router.callback_query(F.data.startswith("buy_qty:"))
@@ -440,6 +441,7 @@ async def checkout_payment(cb: CallbackQuery, state: FSMContext):
     
     await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
     await cb.answer("✅ Purchase successful!", show_alert=True)
+    await check_and_alert_low_stock(cb.bot, pid)
 
 
 @router.callback_query(F.data.startswith("rate:"))
@@ -685,3 +687,47 @@ async def close(cb: CallbackQuery):
     with suppress(TelegramBadRequest):
         await cb.message.delete()
     await cb.answer("Closed. Use /start to reopen.")
+
+
+async def check_and_alert_low_stock(bot, pid):
+    from config import CHANNEL_ID
+    cnt = await db.stock_count(pid)
+    if cnt <= 3:
+        p = await db.get_product(pid)
+        if not p:
+            return
+            
+        emoji = p[1]
+        name = p[2]
+        price = p[3]
+        
+        if cnt == 0:
+            msg = (
+                f"❌ <b>OUT OF STOCK!</b>\n{DIVIDER}\n\n"
+                f"{emoji} <b>{name}</b> is now out of stock!\n\n"
+                f"Admins have been notified to restock. 📦"
+            )
+        else:
+            price_str = "Free 🎁" if price == 0 else f"${price:.2f}"
+            msg = (
+                f"⚠️ <b>LOW STOCK ALERT!</b>\n{DIVIDER}\n\n"
+                f"{emoji} <b>{name}</b> is running low on stock!\n\n"
+                f"🔢 Remaining: <b>{cnt} item(s)</b>\n"
+                f"💰 Price: {price_str}\n\n"
+                f"🛒 Buy now before it sells out! 👇"
+            )
+            
+        if CHANNEL_ID:
+            with suppress(Exception):
+                reply_markup = kb.buy_now_kb() if cnt > 0 else None
+                await bot.send_message(CHANNEL_ID, msg, reply_markup=reply_markup)
+                
+        admin_msg = (
+            f"🚨 <b>ADMIN ALERT: STOCK LOW</b>\n{DIVIDER}\n\n"
+            f"Product: {emoji} <b>{name}</b> (ID: {pid})\n"
+            f"Current Stock: <b>{cnt}</b>\n\n"
+            f"Please restock soon!"
+        )
+        for admin_id in ADMIN_IDS:
+            with suppress(Exception):
+                await bot.send_message(admin_id, admin_msg)
