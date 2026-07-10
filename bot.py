@@ -31,7 +31,7 @@ async def channel_daily_digest(bot: Bot):
                         pid, emoji, name, price, desc, _ = p
                         cnt = await db.stock_count(pid)
                         if cnt > 0:
-                            stock_str = f"🟢 <b>In Stock</b> ({cnt})"
+                            stock_str = f"🟢 <b>In Stock </b> ({cnt})"
                         else:
                             stock_str = "🔴 <b>Out of Stock</b>"
                         
