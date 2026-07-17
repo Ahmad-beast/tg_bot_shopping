@@ -4,7 +4,7 @@ from config import SUPPORT_USERNAME
 
 def main_menu(is_admin=False):
     rows = [
-        [InlineKeyboardButton(text="🛍️ BROWSE CATALOG", callback_data="products")],
+        [InlineKeyboardButton(text="🛍️ Explore Catalog", callback_data="products")],
         [
             InlineKeyboardButton(text="💳 Wallet Balance", callback_data="balance"),
             InlineKeyboardButton(text="📦 My Purchases", callback_data="orders"),
@@ -19,15 +19,24 @@ def main_menu(is_admin=False):
         ],
     ]
     if is_admin:
-        rows.append([InlineKeyboardButton(text="⚙️ ADMIN DASHBOARD", callback_data="admin")])
+        rows.append([InlineKeyboardButton(text="⚙️ Admin Dashboard", callback_data="admin")])
     rows.append([InlineKeyboardButton(text="❌ Close Menu", callback_data="close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def categories_menu(categories):
     rows = []
+    # Display categories in pairs (2 per row) for a cleaner layout if possible
+    temp_row = []
     for c in categories:  # (id, emoji, name)
-        rows.append([InlineKeyboardButton(text=f"{c[1]} {c[2]}", callback_data=f"cat:{c[0]}")])
+        button = InlineKeyboardButton(text=f"{c[1]} {c[2]}", callback_data=f"cat:{c[0]}")
+        temp_row.append(button)
+        if len(temp_row) == 2:
+            rows.append(temp_row)
+            temp_row = []
+    if temp_row:
+        rows.append(temp_row)
+        
     rows.append([InlineKeyboardButton(text="✨ Show All Products", callback_data="cat_all")])
     rows.append([
         InlineKeyboardButton(text="⬅️ Back", callback_data="home"),
@@ -41,9 +50,15 @@ def products_menu(products, stocks, category_id="all"):
     rows = []
     for p in products:  # (id, emoji, name, price, desc, category_id)
         cnt = stocks.get(p[0], 0)
-        tag = f"${p[3]:.2f}" if cnt > 0 else "❌ Out of stock"
+        if cnt > 0:
+            tag = f"${p[3]:.2f}"
+            stock_indicator = "🟢"
+        else:
+            tag = "Out of stock"
+            stock_indicator = "🔴"
+            
         rows.append([InlineKeyboardButton(
-            text=f"{p[1]} {p[2]} — {tag}", callback_data=f"view:{p[0]}")])
+            text=f"{p[1]} {p[2]} • {tag} {stock_indicator}", callback_data=f"view:{p[0]}")])
     
     # If filtered, go back to categories menu, otherwise go back home
     back_cb = "products" if category_id != "all" else "home"
@@ -73,12 +88,12 @@ def product_detail_menu(pid, in_stock, category_id=None, is_free=False):
 def quantity_menu(pid, available):
     rows = [
         [
-            InlineKeyboardButton(text="1", callback_data=f"qsel:{pid}:1"),
-            InlineKeyboardButton(text="2", callback_data=f"qsel:{pid}:2"),
-            InlineKeyboardButton(text="5", callback_data=f"qsel:{pid}:5"),
+            InlineKeyboardButton(text="1️⃣ 1", callback_data=f"qsel:{pid}:1"),
+            InlineKeyboardButton(text="2️⃣ 2", callback_data=f"qsel:{pid}:2"),
+            InlineKeyboardButton(text="5️⃣ 5", callback_data=f"qsel:{pid}:5"),
         ],
         [
-            InlineKeyboardButton(text="10", callback_data=f"qsel:{pid}:10"),
+            InlineKeyboardButton(text="🔟 10", callback_data=f"qsel:{pid}:10"),
             InlineKeyboardButton(text="✏️ Custom", callback_data=f"qsel:{pid}:custom"),
         ],
         [
@@ -90,7 +105,7 @@ def quantity_menu(pid, available):
 
 def checkout_menu(pid, quantity, has_promo=False):
     rows = []
-    rows.append([InlineKeyboardButton(text="✅ Confirm Purchase", callback_data=f"chk_pay:{pid}:{quantity}")])
+    rows.append([InlineKeyboardButton(text="💳 Confirm Purchase", callback_data=f"chk_pay:{pid}:{quantity}")])
     if not has_promo:
         rows.append([InlineKeyboardButton(text="🎟️ Apply Promo Code", callback_data=f"chk_promo:{pid}:{quantity}")])
     rows.append([InlineKeyboardButton(text="❌ Cancel", callback_data=f"view:{pid}")])
@@ -114,7 +129,7 @@ def review_stars_menu(product_id):
 def balance_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎟️ Redeem Promo Code", callback_data="redeem_promo")],
-        [InlineKeyboardButton(text="💎 Top Up (Binance Pay)", callback_data="topup")],
+        [InlineKeyboardButton(text="💎 Top Up (Binance Pay ID)", callback_data="topup")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="home")],
     ])
 
@@ -136,13 +151,13 @@ def admin_menu():
         ],
         [
             InlineKeyboardButton(text="➕ Add Product", callback_data="a_addprod"),
-            InlineKeyboardButton(text="🗂 Manage Products", callback_data="a_listprod"),
+            InlineKeyboardButton(text="🗂️ Manage Products", callback_data="a_listprod"),
         ],
         [
             InlineKeyboardButton(text="📁 Manage Categories", callback_data="a_categories"),
             InlineKeyboardButton(text="🎟️ Promo Codes", callback_data="a_promos"),
         ],
-        [InlineKeyboardButton(text="📁 Bulk Add (CSV)", callback_data="a_bulk")],
+        [InlineKeyboardButton(text="📥 Bulk Add via CSV", callback_data="a_bulk")],
         [
             InlineKeyboardButton(text="💳 Add Balance", callback_data="a_addbal"),
             InlineKeyboardButton(text="👤 User Lookup", callback_data="a_lookup"),
@@ -156,8 +171,8 @@ def admin_menu():
             InlineKeyboardButton(text="✅ Unban User", callback_data="a_unban"),
         ],
         [
-            InlineKeyboardButton(text="📥 Backup DB", callback_data="a_backup"),
-            InlineKeyboardButton(text="⬅️ Back", callback_data="home"),
+            InlineKeyboardButton(text="📥 Backup Database", callback_data="a_backup"),
+            InlineKeyboardButton(text="⬅️ Main Menu", callback_data="home"),
         ],
     ])
 
@@ -166,7 +181,7 @@ def pending_topups_menu(topups):
     """topups: list of rows (id, user_id, amount, name)"""
     rows = []
     for t in topups:
-        rows.append([InlineKeyboardButton(text=f"Review #{t[0]} — {t[3]} (${t[2]:.2f})", callback_data=f"a_tpreview:{t[0]}")])
+        rows.append([InlineKeyboardButton(text=f"Review #{t[0]} • {t[3]} (${t[2]:.2f})", callback_data=f"a_tpreview:{t[0]}")])
     rows.append([InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -188,15 +203,15 @@ def promo_admin_menu():
 def manage_product_menu(pid):
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✏️ Name", callback_data=f"edit:{pid}:name"),
-            InlineKeyboardButton(text="💲 Price", callback_data=f"edit:{pid}:price"),
+            InlineKeyboardButton(text="✏️ Edit Name", callback_data=f"edit:{pid}:name"),
+            InlineKeyboardButton(text="💲 Edit Price", callback_data=f"edit:{pid}:price"),
         ],
         [
-            InlineKeyboardButton(text="📝 Desc", callback_data=f"edit:{pid}:desc"),
-            InlineKeyboardButton(text="😀 Emoji", callback_data=f"edit:{pid}:emoji"),
+            InlineKeyboardButton(text="📝 Edit Desc", callback_data=f"edit:{pid}:desc"),
+            InlineKeyboardButton(text="😀 Edit Emoji", callback_data=f"edit:{pid}:emoji"),
         ],
-        [InlineKeyboardButton(text="➕ Add Stock", callback_data=f"addstock:{pid}")],
-        [InlineKeyboardButton(text="🗑 Delete", callback_data=f"del:{pid}")],
+        [InlineKeyboardButton(text="➕ Add Stock Items", callback_data=f"addstock:{pid}")],
+        [InlineKeyboardButton(text="🗑 Delete Product", callback_data=f"del:{pid}")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="a_listprod")],
     ])
 
@@ -226,8 +241,8 @@ def buy_now_kb():
 
 def stats_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Refresh", callback_data="a_stats")],
-        [InlineKeyboardButton(text="⚠️ Low Stock", callback_data="a_lowstock")],
+        [InlineKeyboardButton(text="🔄 Refresh Stats", callback_data="a_stats")],
+        [InlineKeyboardButton(text="⚠️ Low Stock Alert", callback_data="a_lowstock")],
         [InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin")],
     ])
 
@@ -236,13 +251,13 @@ def addbal_user_menu(uid):
     """Quick amount buttons after selecting a user."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="+$5", callback_data=f"qbal:{uid}:5"),
-            InlineKeyboardButton(text="+$10", callback_data=f"qbal:{uid}:10"),
-            InlineKeyboardButton(text="+$20", callback_data=f"qbal:{uid}:20"),
+            InlineKeyboardButton(text="💵 +$5", callback_data=f"qbal:{uid}:5"),
+            InlineKeyboardButton(text="💵 +$10", callback_data=f"qbal:{uid}:10"),
+            InlineKeyboardButton(text="💵 +$20", callback_data=f"qbal:{uid}:20"),
         ],
         [
-            InlineKeyboardButton(text="+$50", callback_data=f"qbal:{uid}:50"),
-            InlineKeyboardButton(text="+$100", callback_data=f"qbal:{uid}:100"),
+            InlineKeyboardButton(text="💵 +$50", callback_data=f"qbal:{uid}:50"),
+            InlineKeyboardButton(text="💵 +$100", callback_data=f"qbal:{uid}:100"),
         ],
         [InlineKeyboardButton(text="✏️ Custom Amount", callback_data=f"cbal:{uid}")],
         [InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin")],
