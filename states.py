@@ -70,3 +70,9 @@ class ProductReview(StatesGroup):
 
 class RedeemPromo(StatesGroup):
     code = State()
+
+
+class FakeSell(StatesGroup):
+    quantity = State()
+    customer = State()
+
