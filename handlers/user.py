@@ -13,7 +13,7 @@ from config import (
     MIN_TOPUP, is_admin, REFERRAL_COMMISSION_PERCENT, DAILY_REWARD_AMOUNT
 )
 from states import TopUp, BuyProduct, SupportTicket, ProductReview, RedeemPromo
-from subscription import is_subscribed, join_keyboard, join_text 
+from subscription import is_subscribed, join_keyboard, join_text
 
 router = Router()
 
@@ -26,13 +26,14 @@ async def home_text(user_id, name):
     orders = user_info["orders"] if user_info else 0
     
     return (
-        f"<b>🤖 WELCOME TO NOVA X</b>\n"
+        f"<b>⚡ Welcome to NOVA X Store</b>\n"
+        f"<i>Premium Digital Licenses & Keys</i>\n"
         f"{DIVIDER}\n\n"
         f"👋 Welcome, <b>{name}</b>!\n\n"
-        f"💳 <b>Your Wallet Balance:</b> <code>${bal:.2f}</code>\n"
-        f"📦 <b>Total Purchases:</b> <code>{orders}</code>\n"
-        f"👥 <b>Total Invited:</b> <code>{ref_count}</code>\n\n"
-        f"💎 <i>Get instant access to premium digital licenses, streaming accounts, and keys. 24/7 delivery!</i>\n\n"
+        f"💳 <b>Wallet Balance :</b> <code>${bal:.2f}</code>\n"
+        f"📦 <b>Total Orders    :</b> <code>{orders}</code>\n"
+        f"👥 <b>Ref Invited    :</b> <code>{ref_count}</code>\n\n"
+        f"✨ <i>Instant 24/7 delivery on all premium licenses, streaming accounts, and keys.</i>\n\n"
         f"{DIVIDER}\n"
         f"👇 Select an option from the menu below:"
     )
@@ -66,15 +67,18 @@ async def start(message: Message):
         p = await db.get_product(prod_id)
         if p:
             cnt = await db.stock_count(prod_id)
-            stock_line = f"📦 <b>In stock:</b> {cnt}" if cnt > 0 else "❌ <b>Out of stock</b>"
+            stock_line = f"📦 <b>Stock Status:</b> <code>In Stock ({cnt})</code>" if cnt > 0 else "❌ <b>Stock Status:</b> <code>Out of stock</code>"
             rating, count = await db.get_product_rating(prod_id)
-            rating_line = f"⭐ <b>Rating:</b> {rating:.1f}/5.0 ({count} reviews)" if count > 0 else "⭐ <b>Rating:</b> No reviews yet"
+            rating_line = f"⭐ <b>Rating:</b> <code>{rating:.1f}/5.0 ({count} reviews)</code>" if count > 0 else "⭐ <b>Rating:</b> <code>No reviews yet</code>"
             text = (
-                f"<b>{p[1]} {p[2].upper()}</b>\n{DIVIDER}\n\n"
+                f"<b>{p[1]} {p[2].upper()}</b>\n"
+                f"<i>Premium License Key</i>\n"
+                f"{DIVIDER}\n\n"
                 f"{p[4]}\n\n"
-                f"💰 <b>Price:</b> ${p[3]:.2f}\n"
+                f"💰 <b>Price:</b> <code>${p[3]:.2f}</code>\n"
                 f"{rating_line}\n"
-                f"{stock_line}\n\n{DIVIDER}"
+                f"{stock_line}\n\n"
+                f"{DIVIDER}"
             )
             return await message.answer(text, reply_markup=kb.product_detail_menu(prod_id, cnt > 0, category_id=p[5], is_free=(p[3] == 0)))
 
@@ -113,7 +117,9 @@ async def products(cb: CallbackQuery):
         return await show_all_products(cb)
     
     await cb.message.edit_text(
-        f"<b>📂 PRODUCT CATEGORIES</b>\n{DIVIDER}\n\nSelect a category to browse 👇",
+        f"<b>📂 PRODUCT CATEGORIES</b>\n"
+        f"{DIVIDER}\n\n"
+        f"Select a category to browse 👇",
         reply_markup=kb.categories_menu(categories)
     )
     await cb.answer()
@@ -124,12 +130,16 @@ async def show_all_products(cb: CallbackQuery):
     items = await db.get_products()
     if not items:
         await cb.message.edit_text(
-            f"<b>🛒 PRODUCT CATALOG</b>\n{DIVIDER}\n\n🚫 No products available yet.",
+            f"<b>🛒 PRODUCT CATALOG</b>\n"
+            f"{DIVIDER}\n\n"
+            f"🚫 No products available yet.",
             reply_markup=kb.back_menu())
         return await cb.answer()
     stocks = {p[0]: await db.stock_count(p[0]) for p in items}
     await cb.message.edit_text(
-        f"<b>🛒 ALL PRODUCTS</b>\n{DIVIDER}\n\nChoose a product to view details 👇",
+        f"<b>🛒 ALL PRODUCTS</b>\n"
+        f"{DIVIDER}\n\n"
+        f"Choose a product to view details 👇",
         reply_markup=kb.products_menu(items, stocks, category_id="all"))
     await cb.answer()
 
@@ -143,12 +153,16 @@ async def view_category_products(cb: CallbackQuery):
     items = await db.get_products(category_id=cid)
     if not items:
         await cb.message.edit_text(
-            f"<b>📁 {cat[2]}</b>\n{DIVIDER}\n\n🚫 No products available in this category yet.",
+            f"<b>📁 {cat[2]}</b>\n"
+            f"{DIVIDER}\n\n"
+            f"🚫 No products available in this category yet.",
             reply_markup=kb.products_menu([], {}, category_id=cid))
         return await cb.answer()
     stocks = {p[0]: await db.stock_count(p[0]) for p in items}
     await cb.message.edit_text(
-        f"<b>📁 {cat[2]}</b>\n{DIVIDER}\n\nChoose a product to view details 👇",
+        f"<b>📁 {cat[2]}</b>\n"
+        f"{DIVIDER}\n\n"
+        f"Choose a product to view details 👇",
         reply_markup=kb.products_menu(items, stocks, category_id=cid))
     await cb.answer()
 
@@ -160,17 +174,20 @@ async def view_product(cb: CallbackQuery):
     if not p:
         return await cb.answer("Product not found!", show_alert=True)
     cnt = await db.stock_count(pid)
-    stock_line = f"📦 <b>In stock:</b> {cnt}" if cnt > 0 else "❌ <b>Out of stock</b>"
+    stock_line = f"📦 <b>Stock Status:</b> <code>In Stock ({cnt})</code>" if cnt > 0 else "❌ <b>Stock Status:</b> <code>Out of stock</code>"
     
     rating, count = await db.get_product_rating(pid)
-    rating_line = f"⭐ <b>Rating:</b> {rating:.1f}/5.0 ({count} reviews)" if count > 0 else "⭐ <b>Rating:</b> No reviews yet"
+    rating_line = f"⭐ <b>Rating:</b> <code>{rating:.1f}/5.0 ({count} reviews)</code>" if count > 0 else "⭐ <b>Rating:</b> <code>No reviews yet</code>"
 
     text = (
-        f"<b>{p[1]} {p[2].upper()}</b>\n{DIVIDER}\n\n"
+        f"<b>{p[1]} {p[2].upper()}</b>\n"
+        f"<i>Premium License Key</i>\n"
+        f"{DIVIDER}\n\n"
         f"{p[4]}\n\n"
-        f"💰 <b>Price:</b> ${p[3]:.2f}\n"
+        f"💰 <b>Price:</b> <code>${p[3]:.2f}</code>\n"
         f"{rating_line}\n"
-        f"{stock_line}\n\n{DIVIDER}"
+        f"{stock_line}\n\n"
+        f"{DIVIDER}"
     )
     await cb.message.edit_text(text, reply_markup=kb.product_detail_menu(pid, cnt > 0, category_id=p[5], is_free=(p[3] == 0)))
     await cb.answer()
@@ -216,11 +233,14 @@ async def claim_free_product(cb: CallbackQuery):
     await db.add_order(cb.from_user.id, p[2], items[0], 0.0)
     
     delivered = (
-        f"<b>🎁 FREE CLAIM SUCCESSFUL</b>\n{DIVIDER}\n\n"
-        f"📦 Product: {p[1]} <b>{p[2]}</b>\n\n"
-        f"🔐 <b>Your claimed account / key</b>:\n"
+        f"<b>🎁 CLAIM SUCCESSFUL</b>\n"
+        f"<i>Free Reward Delivered!</i>\n"
+        f"{DIVIDER}\n\n"
+        f"📦 <b>Product:</b> {p[1]} <b>{p[2]}</b>\n\n"
+        f"🔐 <b>Your Claimed Account / Key:</b>\n"
         f"<code>{items[0]}</code>\n\n"
-        f"<i>Please rate your claim below! ⭐️</i>"
+        f"{DIVIDER}\n"
+        f"<i>Please rate your claim below! ⭐</i>"
     )
     
     await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
@@ -240,8 +260,11 @@ async def buy_quantity_select(cb: CallbackQuery):
         return await cb.answer("❌ Out of stock!", show_alert=True)
     
     await cb.message.edit_text(
-        f"🛒 <b>Buy {p[1]} {p[2]}</b>\n{DIVIDER}\n\n"
-        f"Select how many items you want to buy (Available: {cnt}):",
+        f"<b>🛒 BUY PRODUCT</b>\n"
+        f"{DIVIDER}\n\n"
+        f"📦 <b>Product:</b> {p[1]} {p[2]}\n"
+        f"🔢 <b>Available:</b> <code>{cnt} items</code>\n\n"
+        f"Select how many items you want to buy 👇",
         reply_markup=kb.quantity_menu(pid, cnt)
     )
     await cb.answer()
@@ -265,9 +288,12 @@ async def quantity_selected(cb: CallbackQuery, state: FSMContext):
         await state.update_data(buy_pid=pid)
         await state.set_state(BuyProduct.quantity)
         await cb.message.edit_text(
-            f"✏️ <b>Enter custom quantity</b> for {p[1]} {p[2]}:\n"
-            f"Available stock: <b>{cnt}</b>\n"
-            f"Price per unit: <b>${p[3]:.2f}</b>",
+            f"<b>✏️ CUSTOM QUANTITY</b>\n"
+            f"{DIVIDER}\n\n"
+            f"📦 <b>Product:</b> {p[1]} {p[2]}\n"
+            f"🔢 <b>Available Stock:</b> <code>{cnt}</code>\n"
+            f"💰 <b>Price per Unit:</b> <code>${p[3]:.2f}</code>\n\n"
+            f"Please enter the exact quantity you wish to purchase:",
             reply_markup=kb.back_menu()
         )
         return await cb.answer()
@@ -314,12 +340,15 @@ async def show_checkout_confirmation(message_obj, state: FSMContext, product, qu
     promo_code_txt = f"\n🔑 Code applied: <code>{promo_code}</code>" if promo_code else ""
     
     text = (
-        f"<b>🛒 CHECKOUT CONFIRMATION</b>\n{DIVIDER}\n\n"
-        f"📦 Product: {product[1]} <b>{product[2]}</b>\n"
-        f"🔢 Quantity: <b>{quantity}</b>\n"
-        f"💵 Price per unit: <b>${product[3]:.2f}</b>{discount_txt}{promo_code_txt}\n\n"
-        f"💰 Total Cost: <b>${total_price:.2f}</b>\n{DIVIDER}\n"
-        f"Confirm your purchase below 👇"
+        f"<b>🛒 CHECKOUT CONFIRMATION</b>\n"
+        f"{DIVIDER}\n\n"
+        f"📦 <b>Product:</b> {product[1]} <b>{product[2]}</b>\n"
+        f"🔢 <b>Quantity:</b> <code>{quantity}</code>\n"
+        f"💵 <b>Price per Unit:</b> <code>${product[3]:.2f}</code>"
+        f"{discount_txt}{promo_code_txt}\n\n"
+        f"💰 <b>Total Cost:</b> <code>${total_price:.2f}</code>\n"
+        f"{DIVIDER}\n"
+        f"Please confirm your purchase below 👇"
     )
     
     reply_markup = kb.checkout_menu(product[0], quantity, has_promo=(promo_code is not None))
@@ -430,13 +459,16 @@ async def checkout_payment(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     
     delivered = (
-        f"<b>✅ PURCHASE SUCCESSFUL</b>\n{DIVIDER}\n\n"
-        f"📦 Product: {p[1]} <b>{p[2]}</b> (x{qty})\n\n"
-        f"🔐 <b>Your account / ID list</b>:\n"
+        f"<b>✅ PURCHASE SUCCESSFUL</b>\n"
+        f"<i>Thank you for your order!</i>\n"
+        f"{DIVIDER}\n\n"
+        f"📦 <b>Product:</b> {p[1]} <b>{p[2]}</b> (x{qty})\n\n"
+        f"🔐 <b>Your Account / ID List:</b>\n"
         f"<code>{content_delivered}</code>\n\n"
-        f"💰 Total Paid: ${price:.2f}\n"
-        f"💵 New balance: ${(bal - price):.2f}\n\n"
-        f"<i>Please rate your purchase below! ⭐️</i>"
+        f"💰 <b>Total Paid:</b> <code>${price:.2f}</code>\n"
+        f"💵 <b>New Balance:</b> <code>${(bal - price):.2f}</code>\n\n"
+        f"{DIVIDER}\n"
+        f"<i>Please rate your purchase below! ⭐</i>"
     )
     
     await cb.message.edit_text(delivered, reply_markup=kb.review_stars_menu(pid))
@@ -472,9 +504,11 @@ async def product_rating_skip(cb: CallbackQuery):
 async def balance(cb: CallbackQuery):
     bal = await db.get_balance(cb.from_user.id)
     await cb.message.edit_text(
-        f"<b>💰 YOUR BALANCE</b>\n{DIVIDER}\n\n"
-        f"💵 Current balance: <b>${bal:.2f}</b>\n\n"
-        f"Top up via Binance Pay 👇\n\n{DIVIDER}",
+        f"<b>💰 WALLET BALANCE</b>\n"
+        f"{DIVIDER}\n\n"
+        f"💵 <b>Current Balance:</b> <code>${bal:.2f}</code>\n\n"
+        f"You can top up your wallet via Binance Pay or redeem a promo gift card code below.\n\n"
+        f"{DIVIDER}",
         reply_markup=kb.balance_menu())
     await cb.answer()
 
@@ -482,10 +516,12 @@ async def balance(cb: CallbackQuery):
 @router.callback_query(F.data == "topup")
 async def topup(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text(
-        f"<b>💎 TOP UP — BINANCE PAY</b>\n{DIVIDER}\n\n"
-        f"Send your payment to:\n\n"
-        f"🆔 Binance Pay ID:\n<code>{BINANCE_PAY_ID}</code>\n\n"
-        f"After paying, type the <b>amount</b> you sent (USD, min ${MIN_TOPUP:.0f}):",
+        f"<b>💎 TOP UP — BINANCE PAY</b>\n"
+        f"{DIVIDER}\n\n"
+        f"Please send your payment to:\n"
+        f"🆔 <b>Binance Pay ID:</b> <code>{BINANCE_PAY_ID}</code>\n\n"
+        f"⚠️ <i>Minimum top-up is <b>${MIN_TOPUP:.0f} USD</b>. Any amount less than this will not be processed.</i>\n\n"
+        f"After paying, enter the exact amount you sent (USD):",
         reply_markup=kb.back_menu())
     await state.set_state(TopUp.amount)
     await cb.answer()
@@ -551,10 +587,12 @@ async def redeem_promo_save(message: Message, state: FSMContext):
     await db.update_balance(message.from_user.id, promo[2])
     
     await message.answer(
-        f"✅ <b>PROMO CODE REDEEMED!</b>\n{DIVIDER}\n\n"
-        f"Promo Code: <code>{code}</code>\n"
-        f"Balance Credited: <b>+${promo[2]:.2f}</b>\n\n"
-        f"Enjoy shopping! 🛍️",
+        f"<b>✅ PROMO CODE REDEEMED</b>\n"
+        f"{DIVIDER}\n\n"
+        f"🔑 <b>Promo Code:</b> <code>{code}</code>\n"
+        f"💳 <b>Credited to Wallet:</b> <code>+${promo[2]:.2f}</code>\n\n"
+        f"Enjoy shopping at NOVA X! 🛍️\n"
+        f"{DIVIDER}",
         reply_markup=kb.back_menu()
     )
 
@@ -566,13 +604,15 @@ async def referrals_home(cb: CallbackQuery):
     ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{cb.from_user.id}"
     
     text = (
-        f"<b>👥 REFERRAL PROGRAM</b>\n{DIVIDER}\n\n"
-        f"Share your referral link with friends and earn <b>{REFERRAL_COMMISSION_PERCENT:.0f}% commission</b> on all their top-ups!\n\n"
+        f"<b>👥 REFERRAL PROGRAM</b>\n"
+        f"{DIVIDER}\n\n"
+        f"Invite your friends to NOVA X and earn <b>{REFERRAL_COMMISSION_PERCENT:.0f}% commission</b> on all their wallet top-ups!\n\n"
         f"🔗 <b>Your Referral Link:</b>\n<code>{ref_link}</code>\n\n"
-        f"📊 <b>Your Stats:</b>\n"
-        f"   • Total Invited: <b>{count} users</b>\n"
-        f"   • Commissions Earned: <b>${earnings:.2f}</b>\n\n"
-        f"<i>Commissions are credited instantly to your balance.</i>"
+        f"📊 <b>Your Statistics:</b>\n"
+        f"• Total Invited: <code>{count} users</code>\n"
+        f"• Commissions: <code>${earnings:.2f}</code>\n\n"
+        f"<i>Commissions are credited instantly to your wallet balance.</i>\n"
+        f"{DIVIDER}"
     )
     await cb.message.edit_text(text, reply_markup=kb.back_menu())
     await cb.answer()
@@ -586,9 +626,11 @@ async def daily_claim_handler(cb: CallbackQuery):
     
     await db.claim_daily_reward(cb.from_user.id, DAILY_REWARD_AMOUNT)
     await cb.message.edit_text(
-        f"<b>🎁 DAILY REWARD CLAIMED!</b>\n{DIVIDER}\n\n"
+        f"<b>🎁 DAILY REWARD CLAIMED</b>\n"
+        f"{DIVIDER}\n\n"
         f"Congratulations! You have received a free credit of <b>${DAILY_REWARD_AMOUNT:.2f}</b> to your balance.\n\n"
-        f"Come back in 24 hours to claim another reward!",
+        f"Come back in 24 hours to claim another reward!\n"
+        f"{DIVIDER}",
         reply_markup=kb.back_menu()
     )
     await cb.answer("Reward claimed!", show_alert=True)
@@ -605,7 +647,10 @@ async def orders(cb: CallbackQuery):
             lines.append(f"• <b>{r[0]}</b> — ${r[2]:.2f}\n   🔐 <code>{r[1]}</code>")
         body = "\n".join(lines)
     await cb.message.edit_text(
-        f"<b>📦 MY ORDERS</b>\n{DIVIDER}\n\n{body}\n\n{DIVIDER}",
+        f"<b>📦 MY PURCHASES</b>\n"
+        f"{DIVIDER}\n\n"
+        f"{body}\n\n"
+        f"{DIVIDER}",
         reply_markup=kb.back_menu())
     await cb.answer()
 
@@ -613,9 +658,11 @@ async def orders(cb: CallbackQuery):
 @router.callback_query(F.data == "support")
 async def support_menu_handler(cb: CallbackQuery):
     await cb.message.edit_text(
-        f"<b>💬 STORE SUPPORT</b>\n{DIVIDER}\n\n"
+        f"<b>💬 STORE SUPPORT</b>\n"
+        f"{DIVIDER}\n\n"
         f"Need assistance? Open a support ticket directly inside the bot, or chat with us on Telegram.\n\n"
-        f"Avg. response time: 5–30 min\n\n{DIVIDER}",
+        f"🕒 <b>Avg. response time:</b> <code>5–30 min</code>\n\n"
+        f"{DIVIDER}",
         reply_markup=kb.support_menu()
     )
     await cb.answer()
@@ -676,8 +723,13 @@ async def support_ticket_message(message: Message, state: FSMContext):
 @router.callback_query(F.data == "about")
 async def about(cb: CallbackQuery):
     await cb.message.edit_text(
-        f"<b>ℹ️ ABOUT STORE</b>\n{DIVIDER}\n\n"
-        f"🛍 Digital Services Store\n\n⚡ Fast Support\n🔒 Trusted Service\n💎 Premium Quality\n\n{DIVIDER}",
+        f"<b>ℹ️ ABOUT STORE</b>\n"
+        f"{DIVIDER}\n\n"
+        f"🛍️ <b>Digital Services Store</b>\n"
+        f"⚡ <i>Fast Support</i>\n"
+        f"🔒 <i>Secure & Trusted</i>\n"
+        f"💎 <i>Premium Quality Licenses</i>\n\n"
+        f"{DIVIDER}",
         reply_markup=kb.back_menu())
     await cb.answer()
 
