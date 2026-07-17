@@ -8,7 +8,8 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from config import CHANNEL_ID, ADMIN_IDS, DIVIDER, is_admin
 from states import (
     AddProduct, EditProduct, AddStock, Broadcast, AddBalance, BanUser, 
-    BulkUpload, UserLookup, CustomBalance, ChannelPost, AddCategory, AddPromo, AdminReplySupport
+    BulkUpload, UserLookup, CustomBalance, ChannelPost, AddCategory, AddPromo, AdminReplySupport,
+    FakeSell
 )
 import database as db
 import keyboards as kb
@@ -22,7 +23,7 @@ async def admin_home(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("⛔ Access Denied!", show_alert=True)
     await state.clear()
     await cb.message.edit_text(
-        f"<b>👑 ADMIN PANEL</b>\n{DIVIDER}\n\nManage your store below 👇 ",
+        f"<b>👑 ADMIN PANEL</b>\n{DIVIDER}\n\nManage your store below 👇",
         reply_markup=kb.admin_menu())
     await cb.answer()
 
@@ -1151,4 +1152,129 @@ async def admin_restore_db(m: Message):
             )
         except Exception as e:
             await progress.edit_text(f"❌ <b>Restoration Failed:</b>\n\n<code>{e}</code>")
+
+
+# ---------- FAKE SALE ANNOUNCEMENT ----------
+@router.callback_query(F.data == "a_fake_sell")
+async def admin_fake_sell_start(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔ Access Denied!", show_alert=True)
+    products = await db.get_products()
+    if not products:
+        return await cb.answer("❌ No products available to sell!", show_alert=True)
+    await cb.message.edit_text(
+        f"<b>📣 FAKE SALE ANNOUNCEMENT</b>\n{DIVIDER}\n\n"
+        f"Select a product to create a fake sale announcement for 👇",
+        reply_markup=kb.fake_sell_products_menu(products)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("fakesel_prod:"))
+async def admin_fake_sell_prod_selected(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return await cb.answer("⛔ Access Denied!", show_alert=True)
+    pid = int(cb.data.split(":")[1])
+    product = await db.get_product(pid)
+    if not product:
+        return await cb.answer("❌ Product not found!", show_alert=True)
+    
+    await state.update_data(fake_pid=pid)
+    await state.set_state(FakeSell.quantity)
+    
+    await cb.message.edit_text(
+        f"<b>📣 FAKE SALE ANNOUNCEMENT</b>\n{DIVIDER}\n\n"
+        f"📦 <b>Selected Product:</b> {product[1]} {product[2]}\n\n"
+        f"Please enter the <b>quantity</b> sold (e.g. 1, 3, 5):",
+        reply_markup=kb.admin_back()
+    )
+    await cb.answer()
+
+
+@router.message(FakeSell.quantity)
+async def admin_fake_sell_qty_received(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    try:
+        qty = int(m.text)
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        return await m.answer("❌ Please enter a valid positive integer.")
+    
+    await state.update_data(fake_qty=qty)
+    await state.set_state(FakeSell.customer)
+    
+    await m.answer(
+        f"<b>📣 FAKE SALE ANNOUNCEMENT</b>\n{DIVIDER}\n\n"
+        f"🔢 <b>Quantity to deduct/post:</b> <code>{qty}</code>\n\n"
+        f"Please send the fake customer name / username to display in the post (e.g. <code>@john</code>, <code>Anonymous</code>, <code>Buyer77</code>):",
+        reply_markup=kb.admin_back()
+    )
+
+
+@router.message(FakeSell.customer)
+async def admin_fake_sell_customer_received(m: Message, state: FSMContext):
+    if not is_admin(m.from_user.id):
+        return
+    
+    customer_name = m.text.strip()
+    data = await state.get_data()
+    pid = data.get("fake_pid")
+    qty = data.get("fake_qty")
+    
+    await state.clear()
+    
+    product = await db.get_product(pid)
+    if not product:
+        return await m.answer("❌ Product not found.", reply_markup=kb.admin_back())
+        
+    # Deduct stock
+    stock_items = await db.take_stock_items(pid, qty)
+    deducted_qty = len(stock_items)
+    
+    stock_note = ""
+    if deducted_qty < qty:
+        stock_note = f"\n⚠️ <i>Note: Only {deducted_qty} actual items were in stock and have been marked as sold.</i>"
+    else:
+        stock_note = f"\n✅ <i>Deducted {deducted_qty} item(s) from store stock successfully.</i>"
+        
+    # Construct channel announcement
+    total_price = product[3] * qty
+    price_str = "Free 🎁" if total_price == 0 else f"${total_price:.2f}"
+    
+    # Try fetching bot username, fallback if none
+    bot_user = await m.bot.get_me()
+    bot_username = bot_user.username if bot_user else "Store"
+    
+    announce = (
+        f"🛍️ <b>NEW PURCHASE</b>\n"
+        f"{DIVIDER}\n\n"
+        f"👤 <b>Customer:</b> <code>{customer_name}</code>\n"
+        f"📦 <b>Product:</b> {product[1]} <b>{product[2]}</b>\n"
+        f"🔢 <b>Quantity:</b> <code>{qty}</code>\n"
+        f"💰 <b>Total Paid:</b> <code>{price_str}</code>\n\n"
+        f"⚡ <i>Instant delivery successful!</i>\n"
+        f"{DIVIDER}\n"
+        f"🛒 <b>Shop:</b> @{bot_username}"
+    )
+    
+    # Send to channel
+    from config import CHANNEL_ID
+    channel_status = "Not sent (CHANNEL_ID not configured)."
+    if CHANNEL_ID:
+        try:
+            await m.bot.send_message(CHANNEL_ID, announce, reply_markup=kb.buy_now_kb())
+            channel_status = "Sent to channel successfully! ✅"
+        except Exception as e:
+            channel_status = f"Failed to send to channel: {e} ❌"
+            
+    await m.answer(
+        f"<b>📣 FAKE SALE CAMPAIGN SUCCESS</b>\n{DIVIDER}\n\n"
+        f"📢 <b>Channel Status:</b> {channel_status}\n"
+        f"{stock_note}\n\n"
+        f"<b>Post Preview:</b>\n\n{announce}",
+        reply_markup=kb.admin_back()
+    )
+
 
