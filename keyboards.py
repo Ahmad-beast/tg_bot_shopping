@@ -166,6 +166,7 @@ def admin_menu():
             InlineKeyboardButton(text="📢 Broadcast", callback_data="a_broadcast"),
             InlineKeyboardButton(text="📣 Channel Post", callback_data="a_channel"),
         ],
+        [InlineKeyboardButton(text="📣 Fake Sale Post", callback_data="a_fake_sell")],
         [
             InlineKeyboardButton(text="🚫 Ban User", callback_data="a_ban"),
             InlineKeyboardButton(text="✅ Unban User", callback_data="a_unban"),
@@ -294,3 +295,12 @@ def broadcast_products_list(products):
         rows.append([InlineKeyboardButton(text=f"{p[1]} {p[2]} (${p[3]:.2f})", callback_data=f"bc_prod:{p[0]}")])
     rows.append([InlineKeyboardButton(text="⬅️ Cancel", callback_data="admin")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def fake_sell_products_menu(products):
+    rows = []
+    for p in products:  # (id, emoji, name, price, desc, category_id)
+        rows.append([InlineKeyboardButton(text=f"{p[1]} {p[2]}", callback_data=f"fakesel_prod:{p[0]}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
